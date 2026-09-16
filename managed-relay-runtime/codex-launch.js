@@ -75,14 +75,16 @@ async function macLaunch(app, args) {
 
 // Codex 桌面应用在 Windows 上没有固定的公开安装位置，这里按常见布局探测。
 // 也可以设置 CODEX_APP_PATH，或在项目 JSON 配置文件里填 codexAppPath，
-// 指向 Codex.exe 本身或它所在的目录。
-const WIN_APP_CANDIDATES = [
-  ['LOCALAPPDATA', 'Programs', 'Codex', 'Codex.exe'],
-  ['LOCALAPPDATA', 'Programs', 'ChatGPT', 'ChatGPT.exe'],
-  ['LOCALAPPDATA', 'Codex', 'Codex.exe'],
-  ['LOCALAPPDATA', 'ChatGPT', 'ChatGPT.exe'],
-  ['PROGRAMFILES', 'Codex', 'Codex.exe'],
-  ['PROGRAMFILES', 'ChatGPT', 'ChatGPT.exe'],
+// 指向 ChatGPT.exe、Codex.exe 本身或它所在的目录。
+// 默认优先 ChatGPT.exe，兼容旧版 Codex.exe；完整文件路径始终按用户指定的启动。
+const WIN_APP_NAMES = ['ChatGPT.exe', 'Codex.exe'];
+const WIN_APP_DIRECTORIES = [
+  ['LOCALAPPDATA', 'Programs', 'ChatGPT'],
+  ['LOCALAPPDATA', 'ChatGPT'],
+  ['PROGRAMFILES', 'ChatGPT'],
+  ['LOCALAPPDATA', 'Programs', 'Codex'],
+  ['LOCALAPPDATA', 'Codex'],
+  ['PROGRAMFILES', 'Codex'],
 ];
 
 async function findWinApp(options = {}) {
@@ -93,23 +95,27 @@ async function findWinApp(options = {}) {
     // 路径写错时给出可操作的提示，而不是裸的 ENOENT。
     const source = resolveCodexPaths({ env, config: fileConfig }).appSource === 'env'
       ? 'CODEX_APP_PATH 环境变量' : `配置文件 ${configPath(env)} 里的 codexAppPath`;
-    let executable;
     try {
-      executable = (await stat(explicit)).isDirectory() ? path.join(explicit, 'Codex.exe') : explicit;
-      await access(executable);
-    } catch {
-      throw new Error(`指定的 Codex 应用不可用：${explicit}。请确认路径存在，指向 Codex.exe 或它所在的目录（检查 ${source}）。`);
-    }
-    return { app: executable, executable };
+      const candidates = (await stat(explicit)).isDirectory()
+        ? WIN_APP_NAMES.map(name => path.win32.join(explicit, name))
+        : [explicit];
+      for (const executable of candidates) {
+        try { await access(executable); return { app: executable, executable }; } catch { /* Try the other executable name. */ }
+      }
+    } catch { /* Explain an unavailable explicit path below. */ }
+    throw new Error(`指定的 Codex 应用不可用：${explicit}。请确认路径存在，指向 ChatGPT.exe、Codex.exe 或包含其中之一的目录（检查 ${source}）。`);
   }
-  for (const segments of WIN_APP_CANDIDATES) {
-    const base = env[segments[0]];
-    if (!base) continue;
-    const executable = path.join(base, ...segments.slice(1));
-    try { await access(executable); return { app: executable, executable }; } catch { /* Try the next layout. */ }
+  // 先在所有候选目录找 ChatGPT.exe，再回退 Codex.exe，避免旧安装抢先命中。
+  for (const name of WIN_APP_NAMES) {
+    for (const segments of WIN_APP_DIRECTORIES) {
+      const base = env[segments[0]];
+      if (!base) continue;
+      const executable = path.win32.join(base, ...segments.slice(1), name);
+      try { await access(executable); return { app: executable, executable }; } catch { /* Try the next layout. */ }
+    }
   }
   throw new Error(
-    '未找到 Codex 桌面应用。请设置 CODEX_APP_PATH 指向 Codex.exe，'
+    '未找到 Codex 桌面应用。请设置 CODEX_APP_PATH 指向 ChatGPT.exe、Codex.exe 或它所在的目录，'
     + `或编辑配置文件 ${configPath(env)} 填写 codexAppPath；`
     + '如果你使用的是 Codex CLI，无需此入口，在终端设置 NO_PROXY 后直接运行 codex 即可。'
   );

@@ -59,27 +59,29 @@ start-codex-local.cmd --check        # Windows
 `CODEX_APP_PATH` 的写法：
 
 - macOS：指向 `.app` 目录（例如 `/Applications/ChatGPT.app`）
-- Windows：指向 `Codex.exe`，或它所在的目录
+- Windows：指向 `ChatGPT.exe`、`Codex.exe` 的完整路径，或它所在的目录
 
 没有环境变量时，把路径写进项目根目录的 JSON 配置文件，换项目、换机器时都不用再设环境变量：
 
 ```json
 {
-  "codexAppPath": "C:\\Users\\you\\AppData\\Local\\Programs\\Codex\\Codex.exe"
+  "codexAppPath": "C:/Tools/Codex/app/ChatGPT.exe"
 }
 ```
 
+填写目录时，脚本优先查找 `ChatGPT.exe`，找不到再使用旧版 `Codex.exe`。填写完整文件路径时，使用指定文件。WindowsApps 安装包中的 `app/ChatGPT.exe` 同样可以直接指定；建议使用 `/` 分隔目录，避免 JSON 反斜杠转义。
+
 同目录的 `codex-relay.config.example.json` 是模板；本机的 `codex-relay.config.json` 不会进版本库。字段说明见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md#项目配置文件-codex-relayconfigjson)。
 
-Windows 上会先自动探测以下位置，都找不到才需要设置：
+Windows 上会先按以下目录顺序查找 `ChatGPT.exe`，全部找不到再按同样顺序查找 `Codex.exe`。ChatGPT 安装目录优先于旧 Codex 安装目录；都找不到时需要手动设置：
 
 ```
-%LOCALAPPDATA%\Programs\Codex\Codex.exe
-%LOCALAPPDATA%\Programs\ChatGPT\ChatGPT.exe
-%LOCALAPPDATA%\Codex\Codex.exe
-%LOCALAPPDATA%\ChatGPT\ChatGPT.exe
-%PROGRAMFILES%\Codex\Codex.exe
-%PROGRAMFILES%\ChatGPT\ChatGPT.exe
+%LOCALAPPDATA%\Programs\ChatGPT
+%LOCALAPPDATA%\ChatGPT
+%PROGRAMFILES%\ChatGPT
+%LOCALAPPDATA%\Programs\Codex
+%LOCALAPPDATA%\Codex
+%PROGRAMFILES%\Codex
 ```
 
 使用非默认管理端口时传入 `RELAY_UI_PORT`。
@@ -129,7 +131,7 @@ node --version     # 应输出 v22.13.0 或更高
 ## 常见报错
 
 - **未找到 Codex 桌面应用**：先确认路径写对，再按上面的顺序设置 `CODEX_APP_PATH` 或 `codexAppPath`。报错信息里会带上实际读取的配置文件路径，照着改即可。
-- **指定的 Codex 应用不可用**：环境变量或配置文件里的路径不存在，或者指向的不是 Codex（Windows 需要指向 `Codex.exe` 或其所在目录，macOS 需要 `.app`）。
+- **指定的 Codex 应用不可用**：环境变量或配置文件里的路径不存在或不可访问，或者目录中没有 `ChatGPT.exe` / `Codex.exe`（macOS 需要有效的 Codex `.app`）。
 - **Codex 尚未接入本地代理**：先在管理页面点击「接入本地代理」，再运行本入口。
 - **中转服务未响应**：管理服务没在运行，或端口被 `RELAY_UI_PORT` 改过而这里没同步。
 

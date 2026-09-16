@@ -16,6 +16,24 @@ test('Codex launch preserves both existing bypass lists and adds local addresses
 const allow = (...allowed) => async target => {
   if (!allowed.includes(target)) throw new Error('ENOENT: ' + target);
 };
+const WINDOWS_APPS_DIR = String.raw`C:\Program Files\WindowsApps\OpenAI.Codex\_26.908.9136.0\_x64\_\_2p2nqsd0c76g0\app`;
+
+test('Windows reads the supplied ChatGPT.exe path from a pasted JSON configuration', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-launch-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'config.json');
+  const executable = path.win32.join(WINDOWS_APPS_DIR, 'ChatGPT.exe');
+  await fs.writeFile(file, `{"codexAppPath":"${executable}"}`);
+  const app = await findWinApp({
+    env: { CODEX_TOOL_CONFIG: file },
+    access: allow(executable),
+    stat: async target => {
+      assert.equal(target, executable);
+      return { isDirectory: () => false };
+    },
+  });
+  assert.deepEqual(app, { app: executable, executable });
+});
 
 test('Windows app detection uses the config file when no candidate path exists', async () => {
   const app = await findWinApp({
@@ -27,24 +45,57 @@ test('Windows app detection uses the config file when no candidate path exists',
   assert.deepEqual(app, { app: 'C:\\Tools\\Codex\\Codex.exe', executable: 'C:\\Tools\\Codex\\Codex.exe' });
 });
 
-test('Windows app detection appends Codex.exe when codexAppPath is a directory', async () => {
+test('Windows app detection prefers ChatGPT.exe when a directory contains both names', async () => {
   const app = await findWinApp({
     env: {},
     config: { codexAppPath: 'C:\\Tools\\Codex' },
-    access: allow(path.join('C:\\Tools\\Codex', 'Codex.exe')),
+    access: allow(path.win32.join('C:\\Tools\\Codex', 'Codex.exe'), path.win32.join('C:\\Tools\\Codex', 'ChatGPT.exe')),
     stat: async () => ({ isDirectory: () => true }),
   });
-  assert.equal(app.executable, path.join('C:\\Tools\\Codex', 'Codex.exe'));
+  assert.equal(app.executable, path.win32.join('C:\\Tools\\Codex', 'ChatGPT.exe'));
+});
+
+test('a configured directory still supports legacy Codex.exe when ChatGPT.exe is absent', async () => {
+  const executable = path.win32.join(WINDOWS_APPS_DIR, 'Codex.exe');
+  const app = await findWinApp({
+    env: {},
+    config: { codexAppPath: WINDOWS_APPS_DIR },
+    access: allow(executable),
+    stat: async () => ({ isDirectory: () => true }),
+  });
+  assert.equal(app.executable, executable);
+});
+
+test('a configured WindowsApps directory can contain only ChatGPT.exe', async () => {
+  const executable = path.win32.join(WINDOWS_APPS_DIR, 'ChatGPT.exe');
+  const app = await findWinApp({
+    env: {},
+    config: { codexAppPath: WINDOWS_APPS_DIR },
+    access: allow(executable),
+    stat: async () => ({ isDirectory: () => true }),
+  });
+  assert.deepEqual(app, { app: executable, executable });
+});
+
+test('an unavailable explicit directory reports both names instead of launching a default app', async () => {
+  const checked = [];
+  await assert.rejects(findWinApp({
+    env: { LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' },
+    config: { codexAppPath: WINDOWS_APPS_DIR },
+    access: async target => { checked.push(target); throw new Error('ENOENT'); },
+    stat: async () => ({ isDirectory: () => true }),
+  }), error => /Codex\.exe/.test(error.message) && /ChatGPT\.exe/.test(error.message) && /codexAppPath/.test(error.message));
+  assert.deepEqual(checked, [path.win32.join(WINDOWS_APPS_DIR, 'ChatGPT.exe'), path.win32.join(WINDOWS_APPS_DIR, 'Codex.exe')]);
 });
 
 test('CODEX_APP_PATH still outranks the config file on Windows', async () => {
   const app = await findWinApp({
-    env: { CODEX_APP_PATH: 'D:\\Portable\\Codex.exe' },
+    env: { CODEX_APP_PATH: 'D:\\Portable\\ChatGPT.exe' },
     config: { codexAppPath: 'C:\\Tools\\Codex.exe' },
-    access: allow('D:\\Portable\\Codex.exe'),
+    access: allow('D:\\Portable\\ChatGPT.exe'),
     stat: async () => ({ isDirectory: () => false }),
   });
-  assert.equal(app.executable, 'D:\\Portable\\Codex.exe');
+  assert.equal(app.executable, 'D:\\Portable\\ChatGPT.exe');
 });
 
 test('Windows app detection still probes the default layouts before failing', async () => {
@@ -52,10 +103,30 @@ test('Windows app detection still probes the default layouts before failing', as
   const app = await findWinApp({
     env: { LOCALAPPDATA: base },
     config: {},
-    access: allow(path.join(base, 'Programs', 'Codex', 'Codex.exe')),
+    access: allow(path.win32.join(base, 'Programs', 'Codex', 'Codex.exe')),
     stat: async () => ({ isDirectory: () => false }),
   });
-  assert.equal(app.executable, path.join(base, 'Programs', 'Codex', 'Codex.exe'));
+  assert.equal(app.executable, path.win32.join(base, 'Programs', 'Codex', 'Codex.exe'));
+});
+
+test('Windows auto-detection accepts ChatGPT.exe in both Codex and ChatGPT installation directories', async () => {
+  const base = 'C:\\Users\\me\\AppData\\Local';
+  for (const directory of ['Codex', 'ChatGPT']) {
+    const executable = path.win32.join(base, 'Programs', directory, 'ChatGPT.exe');
+    const app = await findWinApp({ env: { LOCALAPPDATA: base }, config: {}, access: allow(executable) });
+    assert.equal(app.executable, executable);
+  }
+});
+
+test('Windows auto-detection prioritizes ChatGPT.exe across directories and prefers ChatGPT installations', async () => {
+  const env = { LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local', PROGRAMFILES: 'C:\\Program Files' };
+  const chatGptApp = path.win32.join(env.PROGRAMFILES, 'ChatGPT', 'ChatGPT.exe');
+  const codexPackageChatGpt = path.win32.join(env.PROGRAMFILES, 'Codex', 'ChatGPT.exe');
+  const legacyApp = path.win32.join(env.LOCALAPPDATA, 'Programs', 'ChatGPT', 'Codex.exe');
+  const preferred = await findWinApp({ env, config: {}, access: allow(chatGptApp, codexPackageChatGpt, legacyApp) });
+  assert.equal(preferred.executable, chatGptApp, '优先 ChatGPT 安装目录中的 ChatGPT.exe');
+  const otherDirectory = await findWinApp({ env, config: {}, access: allow(codexPackageChatGpt, legacyApp) });
+  assert.equal(otherDirectory.executable, codexPackageChatGpt, '先找遍 ChatGPT.exe，再回退旧名称');
 });
 
 test('a missing Windows app points users at CODEX_APP_PATH and the JSON config file', async () => {

@@ -37,17 +37,22 @@ sh start-managed-relay.sh
 
 ```json
 {
-  "codexAppPath": "C:\\Users\\you\\AppData\\Local\\Programs\\Codex\\Codex.exe",
-  "codexHome": "C:\\Users\\you\\.codex"
+  "codexAppPath": "C:/Users/you/AppData/Local/Programs/Codex/Codex.exe",
+  "codexHome": "C:/Users/you/.codex"
 }
 ```
 
+Windows 接受 `/` 作为路径分隔符，推荐上述写法，包含空格也无需额外转义。使用反斜杠时，标准 JSON 要把每个 `\` 写成 `\\`；例如 `C:\\Users\\you\\.codex`。
+
+本工具只对顶层的两个路径字段及其下划线别名做容错，可读取常见的单反斜杠路径，包括中文目录、UNC 网络路径和末尾分隔符。`C:\temp` 中的 `\t`、`C:\new` 中的 `\n` 会保留为路径；检测到 `C:\u0061` 这类单反斜杠 Windows 前缀时，也按原路径保留。正确使用 `\\` 转义的路径继续按标准 JSON 解析。该容错不会重写磁盘文件，也不会修复 `$comment` 等其他字段；为兼容其他 JSON 工具并避免转义歧义，仍请优先使用 `/` 或标准 `\\`。
+
 | 字段 | 含义 | 留空时 |
 | --- | --- | --- |
-| `codexAppPath` | Codex **桌面应用**位置：Windows 填 `Codex.exe` 或它所在目录，macOS 填 `.app` 目录 | 按平台自动探测常见安装位置 |
+| `codexAppPath` | Codex **桌面应用**位置：Windows 填 `ChatGPT.exe`、`Codex.exe` 的完整路径或它所在目录，macOS 填 `.app` 目录 | 按平台自动探测常见安装位置 |
 | `codexHome` | Codex **配置目录**（含 `config.toml`、`key_config.json`） | 用页面保存的目录，再回退到 `~/.codex` |
 
 - 两个字段都可以省略，文件也可以完全不存在。也支持 `codex_app_path` / `codex_home` 这种下划线写法，值里的 `~` 和 `%LOCALAPPDATA%` 会自动展开。
+- Windows 填写目录时优先 `ChatGPT.exe`，找不到再使用 `Codex.exe`。自动探测时也先在所有候选目录查找 `ChatGPT.exe`，再回退 `Codex.exe`。填写完整文件路径时，始终使用指定文件，包括 WindowsApps 安装目录里的 `app/ChatGPT.exe`。
 - 查找顺序：`CODEX_TOOL_CONFIG` 指定的路径 > 项目根目录 > `~/.config/codex-relay-ui/`（Windows 为 `%APPDATA%\codex-relay-ui\`）。
 - 优先级：`CODEX_APP_PATH` / `CODEX_HOME` 环境变量仍然高于配置文件，方便临时覆盖。
 - `codexHome` 生效时页面输入框锁定，并提示「由 JSON 配置文件指定」；要改目录请编辑这个文件。
