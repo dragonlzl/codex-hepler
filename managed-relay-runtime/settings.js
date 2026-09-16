@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { atomicWrite, problem } = require('./config-store');
+const { parseLooseJson, expandPath } = require('./codex-config');
 
 // 目录设置必须存在 CODEX_HOME 之外：它记录的正是 CODEX_HOME 的位置，
 // 存进去会变成先有鸡还是先有蛋。这里按平台放到用户的配置目录。
@@ -33,11 +34,44 @@ async function writeSettings(patch, env = process.env) {
   return file;
 }
 
+// JSON 提供目录时，页面修改写回同一份配置，避免重启后被旧 codexHome 覆盖。
+// 每次读取最新内容，保留应用路径、注释及未知字段；损坏的文件不能被空配置覆盖。
+async function writeToolConfig(file, patch, { create = false } = {}) {
+  let source;
+  try { source = await fs.readFile(file, 'utf8'); }
+  catch (error) {
+    if (create && error.code === 'ENOENT') source = '{}';
+    else throw problem('无法读取 JSON 配置，请检查文件是否存在及访问权限。');
+  }
+  const config = parseLooseJson(source);
+  if (!config) throw problem('JSON 配置已损坏，未进行修改。请先修正配置文件。');
+  Object.assign(config, patch);
+  for (const [name, alias] of [['codexHome', 'codex_home'], ['codexAppPath', 'codex_app_path']]) {
+    if (Object.hasOwn(patch, name) && Object.hasOwn(config, alias)) config[alias] = patch[name];
+  }
+  try {
+    if (create) await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await atomicWrite(file, `${JSON.stringify(config, null, 2)}\n`);
+  } catch { throw problem('无法保存 JSON 配置，请检查配置文件及所在目录的写入权限。', 500); }
+}
+
+const writeConfigHome = (file, home) => writeToolConfig(file, { codexHome: home });
+const writeConfigAppPath = (file, appPath) => writeToolConfig(file, { codexAppPath: appPath }, { create: true });
+
+async function resolveAppPath(target) {
+  if (typeof target !== 'string' || target.includes('\0')) throw problem('请填写有效的 ChatGPT 应用路径。', 400);
+  const resolved = expandPath(target);
+  if (!resolved) return null;
+  const stat = await fs.stat(resolved).catch(() => null);
+  if (!stat || (!stat.isFile() && !stat.isDirectory())) throw problem('应用路径不存在或不可访问，请填写可执行文件或应用所在目录。', 400);
+  return resolved;
+}
+
 const isDirectory = async target => fs.stat(target).then(stat => stat.isDirectory(), () => false);
 const exists = async target => fs.access(target).then(() => true, () => false);
 
-// 展示用路径：把当前用户的主目录前缀折叠成 ~，避免页面、报错和截图暴露真实用户名。
-// 只影响展示，内部逻辑一律使用绝对路径。同时兼容 / 与 \ 两种分隔符。
+// 默认引导和报错用路径：把当前用户的主目录前缀折叠成 ~。
+// 用户已配置的目录直接显示完整路径，便于核对；同时兼容 / 与 \ 两种分隔符。
 function displayPath(value, home = os.homedir()) {
   if (typeof value !== 'string' || !home || !value.startsWith(home)) return value;
   const rest = value.slice(home.length);
@@ -65,4 +99,4 @@ async function resolveHome(target) {
   return { home: resolved, created };
 }
 
-module.exports = { settingsPath, readSettings, writeSettings, resolveHome, displayPath };
+module.exports = { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath };

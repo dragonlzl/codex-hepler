@@ -61,6 +61,8 @@ start-codex-local.cmd --check        # Windows
 - macOS：指向 `.app` 目录（例如 `/Applications/ChatGPT.app`）
 - Windows：指向 `ChatGPT.exe`、`Codex.exe` 的完整路径，或它所在的目录
 
+也可以在管理页面的「目录与应用 → ChatGPT 应用」中直接填写并保存；页面会将路径写入下述 JSON 配置，并在下次使用启动脚本时生效。留空保存可恢复自动查找；存在 `CODEX_APP_PATH` 环境变量时，页面显示该来源并锁定应用路径。
+
 没有环境变量时，把路径写进项目根目录的 JSON 配置文件，换项目、换机器时都不用再设环境变量：
 
 ```json

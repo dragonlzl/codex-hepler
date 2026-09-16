@@ -26,6 +26,9 @@ let editBusy = false;
 const homeForm = document.querySelector('#home-form');
 const homeResult = document.querySelector('#home-result');
 let homeDirty = false;
+const appPathForm = document.querySelector('#app-path-form');
+const appPathResult = document.querySelector('#app-path-result');
+let appPathDirty = false;
 
 function sourceLabel(source) {
   return ({
@@ -70,17 +73,32 @@ function renderHome() {
   // 输入框有未保存内容时不回填，避免轮询覆盖用户正在编辑的路径。
   if (state.home && !homeDirty) input.value = state.home;
   const locked = Boolean(state.homeLocked);
-  input.disabled = locked || busy;
+  input.disabled = locked || busy || !loaded;
   homeForm.querySelector('button').disabled = locked || busy || !loaded;
-  const source = state.homeSource === 'saved' ? '（已保存，重启服务后仍生效）'
-    : state.homeSource === 'arg' || state.homeSource === 'argument' ? '（由启动参数指定，页面不能修改）'
-      : state.homeSource === 'env' ? '（由 CODEX_HOME 环境变量指定，页面不能修改）'
-        : state.homeSource === 'config' ? '（由 JSON 配置文件指定，页面不能修改）'
-          : '（默认位置，保存后会记住）';
-  const app = state.codexAppPath ? ` · Codex 应用：${state.codexAppPath}` : '';
-  document.querySelector('#home-status').textContent = !state.home
-    ? '尚未读取到目录设置。'
-    : `当前目录：${state.home}${source} · 设置文件：${state.settingsPath || '—'}${app}`;
+  const source = state.homeSource === 'saved' ? '页面保存，重启服务后仍生效'
+    : state.homeSource === 'arg' || state.homeSource === 'argument' ? '启动参数指定，页面不能修改'
+      : state.homeSource === 'env' ? 'CODEX_HOME 环境变量指定，页面不能修改'
+        : state.homeSource === 'config' ? 'JSON 配置文件，保存会更新该文件'
+          : '默认位置，保存后会记住';
+  const rows = state.home ? [['当前目录', state.home, true], ['配置来源', source]] : [['目录设置', '尚未读取到目录设置。']];
+  if (state.home && state.homeSource === 'config') rows.push(['配置文件', state.configPath || '—', true]);
+  else if (state.home && !locked) rows.push(['保存位置', state.settingsPath || '—', true]);
+  const html = rows.map(([label, value, isPath]) => `<div><dt>${label}</dt><dd${isPath ? ' class="home-detail-path"' : ''}>${escapeHtml(value)}</dd></div>`).join('');
+  const details = document.querySelector('#home-status');
+  if (details.innerHTML !== html) details.innerHTML = html;
+}
+
+function renderAppPath() {
+  if (!appPathDirty) appPathForm.elements.appPath.value = state.codexAppPath || '';
+  for (const control of appPathForm.elements) control.disabled = busy || !loaded || Boolean(state.appPathLocked);
+  const rows = !loaded ? [['应用路径', '正在读取应用路径。']]
+    : state.appPathLocked ? [['配置来源', 'CODEX_APP_PATH 环境变量指定，页面不能修改']]
+      : [['配置来源', state.appPathSource === 'config' ? 'JSON 配置文件，保存会更新该文件' : '自动查找 ChatGPT，找不到再查找 Codex'],
+        ['保存位置', state.configPath || '—', true]];
+  if (loaded && state.codexAppPath) rows.unshift(['当前应用', state.codexAppPath, true]);
+  const html = rows.map(([label, value, isPath]) => `<div><dt>${label}</dt><dd${isPath ? ' class="home-detail-path"' : ''}>${escapeHtml(value)}</dd></div>`).join('');
+  const details = document.querySelector('#app-path-status');
+  if (details.innerHTML !== html) details.innerHTML = html;
 }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
@@ -114,6 +132,7 @@ function renderControls() {
   document.querySelector('#add-form button').disabled = busy || !loaded || state.writeBlocked;
   renderNetwork();
   renderHome();
+  renderAppPath();
 }
 
 function showFeedback(phase, message) {
@@ -404,6 +423,28 @@ homeForm.addEventListener('submit', async event => {
   } catch (error) {
     homeResult.className = 'error';
     homeResult.textContent = errorMessage(error);
+  } finally { busy = false; renderControls(); }
+});
+appPathForm.addEventListener('input', () => { appPathDirty = true; });
+appPathForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (busy || !loaded || state.appPathLocked) return;
+  const target = appPathForm.elements.appPath.value;
+  busy = true;
+  mutationVersion++;
+  appPathResult.className = '';
+  appPathResult.textContent = '正在保存应用路径…';
+  renderControls();
+  try {
+    const data = await api('/api/app-path', { appPath: target });
+    Object.assign(state, data.status);
+    appPathDirty = false;
+    appPathResult.className = 'success';
+    appPathResult.textContent = data.message;
+    render();
+  } catch (error) {
+    appPathResult.className = 'error';
+    appPathResult.textContent = errorMessage(error);
   } finally { busy = false; renderControls(); }
 });
 load();

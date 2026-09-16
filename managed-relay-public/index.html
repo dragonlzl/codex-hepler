@@ -25,13 +25,23 @@
         <section class="request-status"><p id="last-request" role="status">尚未读取请求状态。</p><button id="refresh-status" type="button" title="刷新状态" aria-label="刷新状态">↻</button></section>
         <section id="notice" class="notice" hidden></section>
         <section class="home-panel" aria-labelledby="home-title">
-          <h3 id="home-title">CODEX 目录</h3>
-          <p id="home-status" role="status">正在读取目录设置。</p>
-          <form id="home-form">
+          <h3 id="home-title">目录与应用</h3>
+          <dl id="home-status" class="home-details" role="status"><div><dt>目录设置</dt><dd>正在读取目录设置。</dd></div></dl>
+          <form id="home-form" class="path-form">
             <label>Codex 配置目录<input id="home-path" name="home" type="text" placeholder="~/.codex" autocomplete="off" spellcheck="false" /></label>
             <button class="secondary" type="submit">保存目录</button>
           </form>
           <p id="home-result" role="status" aria-live="polite"></p>
+          <div class="app-path-panel">
+            <h4>ChatGPT 应用</h4>
+            <dl id="app-path-status" class="home-details" role="status"><div><dt>应用路径</dt><dd>正在读取应用路径。</dd></div></dl>
+            <form id="app-path-form" class="path-form">
+              <label>应用路径<input id="app-path" name="appPath" type="text" placeholder="留空自动查找 ChatGPT" autocomplete="off" spellcheck="false" aria-describedby="app-path-help" /></label>
+              <button class="secondary" type="submit">保存应用路径</button>
+            </form>
+            <p id="app-path-help">Windows 填 ChatGPT.exe 的完整路径或所在目录，也兼容 Codex.exe；macOS 填 .app 目录。</p>
+            <p id="app-path-result" role="status" aria-live="polite"></p>
+          </div>
         </section>
         <section class="network-panel" aria-labelledby="network-title">
           <h3 id="network-title">STEP 3 · 上游网络</h3>

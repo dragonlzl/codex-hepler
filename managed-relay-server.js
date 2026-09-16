@@ -6,7 +6,7 @@ const { ConfigStore, problem } = require('./managed-relay-runtime/config-store')
 const { createProxy } = require('./managed-relay-runtime/proxy');
 const { Outbound } = require('./managed-relay-runtime/outbound');
 const { Diagnostics } = require('./managed-relay-runtime/diagnostics');
-const { settingsPath, readSettings, writeSettings, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
+const { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
 const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
 
 const PUBLIC_DIR = path.join(__dirname, 'managed-relay-public');
@@ -54,9 +54,12 @@ async function start(options = {}) {
   const paths = resolveCodexPaths({ env: process.env, config: fileConfig });
   const savedHome = externalHome || paths.home ? null : (await readSettings()).home;
   const initialHome = externalHome || paths.home || savedHome || path.join(os.homedir(), '.codex');
-  const homeLocked = Boolean(externalHome || paths.home);
-  const homeSource = options.home ? 'argument' : process.env.CODEX_HOME ? 'env' : paths.home ? 'config' : savedHome ? 'saved' : 'default';
+  const homeLocked = Boolean(externalHome);
+  let homeSource = options.home ? 'argument' : process.env.CODEX_HOME ? 'env' : paths.home ? 'config' : savedHome ? 'saved' : 'default';
   const settingsFile = settingsPath();
+  let appPath = paths.appPath;
+  let appPathSource = paths.appSource;
+  const appPathLocked = paths.appSource === 'env';
 
   const build = (target, injected) => {
     const store = new ConfigStore(target, 'http://127.0.0.1:' + proxyPort + '/v1');
@@ -86,32 +89,56 @@ async function start(options = {}) {
     lastRequest = entry;
     record({ event: 'relay_request', ...entry });
   }, options.timeoutMs, outbound, options.connectTimeoutMs, entry => record({ event: 'relay_request_started', ...entry }));
-  const lockReason = externalHome
-    ? '当前目录由环境变量或启动参数指定，不能在页面修改。'
-    : `当前目录由 JSON 配置文件指定，不能在页面修改。请编辑 ${displayPath(paths.configFile)} 里的 codexHome。`;
+  const lockReason = '当前目录由环境变量或启动参数指定，不能在页面修改。';
   const status = async () => {
     const current = await store.status();
     const entry = current.keys.find(item => item.name === current.selectedProxyName);
-    return { ...current, home: displayPath(holder.home), homeSource, homeLocked, settingsPath: displayPath(settingsFile),
-      configPath: displayPath(paths.configFile), codexAppPath: paths.appPath ? displayPath(paths.appPath) : null,
+    return { ...current, home: homeSource === 'default' ? displayPath(holder.home) : path.resolve(holder.home),
+      homeSource, homeLocked, settingsPath: displayPath(settingsFile),
+      configPath: displayPath(paths.configFile), codexAppPath: appPath || null, appPathSource, appPathLocked,
       lastRequest, lastDiagnostic, diagnosticsAvailable: true, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
+  let savingPaths = false;
   const switchHome = async target => {
     if (homeLocked) throw problem(lockReason, 409);
-    const { home: resolved, created } = await resolveHome(target);
-    const next = build(resolved);
-    next.store.proxyUrl = 'http://127.0.0.1:' + proxy.address().port + '/v1';
-    for (const port of boundPorts) next.outbound.localPorts.add(port);
-    await next.store.status();
-    await writeSettings({ home: resolved });
-    const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics };
-    Object.assign(holder, { home: resolved, ...next });
-    previous.outbound.close();
-    await previous.diagnostics.close();
-    lastRequest = null;
-    lastDiagnostic = null;
-    return { message: `已切换到 ${displayPath(resolved)}${created ? '，并创建了空的 key_config.json。' : '。'}` };
+    if (savingPaths) throw problem('目录或应用路径正在保存，请稍后重试。', 409);
+    savingPaths = true;
+    let next;
+    try {
+      const { home: resolved, created } = await resolveHome(target);
+      next = build(resolved);
+      next.store.proxyUrl = 'http://127.0.0.1:' + proxy.address().port + '/v1';
+      for (const port of boundPorts) next.outbound.localPorts.add(port);
+      await next.store.status();
+      const fromConfig = homeSource === 'config';
+      if (fromConfig) await writeConfigHome(paths.configFile, resolved);
+      else await writeSettings({ home: resolved });
+      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics };
+      Object.assign(holder, { home: resolved, ...next });
+      next = null;
+      homeSource = fromConfig ? 'config' : 'saved';
+      previous.outbound.close();
+      await previous.diagnostics.close();
+      lastRequest = null;
+      lastDiagnostic = null;
+      return { message: `已切换到 ${resolved}，已保存到${fromConfig ? ' JSON 配置文件' : '目录设置'}${created ? '，并创建了空的 key_config.json' : ''}。` };
+    } finally {
+      if (next) { next.outbound.close(); await next.diagnostics.close(); }
+      savingPaths = false;
+    }
+  };
+  const switchAppPath = async target => {
+    if (appPathLocked) throw problem('应用路径由 CODEX_APP_PATH 环境变量指定，不能在页面修改。', 409);
+    if (savingPaths) throw problem('目录或应用路径正在保存，请稍后重试。', 409);
+    savingPaths = true;
+    try {
+      const resolved = await resolveAppPath(target);
+      await writeConfigAppPath(paths.configFile, resolved || '');
+      appPath = resolved;
+      appPathSource = resolved ? 'config' : null;
+      return { message: resolved ? '应用路径已保存，下次通过启动脚本启动时生效。' : '已保存，下次启动时自动查找 ChatGPT，找不到再查找 Codex。' };
+    } finally { savingPaths = false; }
   };
   let uiUrl;
   const ui = http.createServer((req, res) => {
@@ -138,6 +165,7 @@ async function start(options = {}) {
           result = { diagnostic: lastDiagnostic };
         }
         else if (url.pathname === '/api/home') result = await switchHome(payload.home);
+        else if (url.pathname === '/api/app-path') result = await switchAppPath(payload.appPath);
         else throw problem('接口不存在。', 404);
         json(res, 200, { ...result, status: await status() });
         return;

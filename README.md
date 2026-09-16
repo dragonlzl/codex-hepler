@@ -36,6 +36,7 @@
 - Windows 路径推荐像上面这样使用 `/`，也可以按标准 JSON 把每个 `\` 写成 `\\`。路径字段兼容直接粘贴常见的单反斜杠路径，但这种写法可能被其他 JSON 工具判为无效；有歧义的转义写法请改用 `/`。
 - `codexAppPath`：Codex 桌面应用位置，解决「未找到 Codex 桌面应用」并让 `start-codex-local.*` 能找到应用。Windows 填 `ChatGPT.exe`、`Codex.exe` 的完整路径或它所在目录，macOS 填 `.app` 目录。填写目录时优先 `ChatGPT.exe`，找不到再使用 `Codex.exe`；要指定启动哪一个，填写对应文件的完整路径。
 - `codexHome`：Codex 配置目录（含 `config.toml`、`key_config.json`），等价于在页面上保存「CODEX 目录」，但随项目分发。
+- 页面「目录与应用」可分别保存 Codex 配置目录和 ChatGPT 应用路径。应用路径写入同一 JSON 的 `codexAppPath`，完整展示已填写的路径，留空恢复自动查找；下一次通过启动脚本启动时生效。
 - 两个字段都可以省略，环境变量 `CODEX_APP_PATH` / `CODEX_HOME` 仍优先于它们；留空时按各自平台自动探测。
 - 本机的 `codex-relay.config.json` 已在 `.gitignore` 中忽略，**只有 `codex-relay.config.example.json` 会进版本库**。
 
@@ -76,7 +77,7 @@
 
   设置文件**故意放在 Codex 目录之外**——它记录的就是 Codex 目录的位置，存进去会变成死循环。它只有 `0600` 权限，且只存路径，不存任何密钥。
 
-- 目录优先级：**启动参数 > `CODEX_HOME` 环境变量 > `codex-relay.config.json` 的 `codexHome` > 页面保存的目录 > 默认 `~/.codex`**。用前三种方式指定时，页面上的输入框会被锁定（避免多处设置互相打架），页面上会标注来源。
+- 目录优先级：**启动参数 > `CODEX_HOME` 环境变量 > `codex-relay.config.json` 的 `codexHome` > 页面保存的目录 > 默认 `~/.codex`**。只有启动参数和环境变量会锁定页面输入框；JSON 配置的目录可以在页面修改，保存会写回同一配置文件。默认引导使用 `~/.codex`，已配置或保存的目录完整显示，方便核对。
 - 保存前会校验目标目录：必须存在，且包含 `config.toml`（否则拒绝并给出原因）。**如果目标目录缺少 `key_config.json`，会自动创建一个空的**，方便在新设备上直接开始使用。
 - 需要用独立目录做测试时，可以设 `RELAY_UI_SETTINGS` 环境变量把设置文件指到别处。
 
