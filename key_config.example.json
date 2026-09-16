@@ -1,0 +1,14 @@
+{
+  "keys": [
+    {
+      "name": "中转站 A",
+      "value": "sk-REPLACE-WITH-YOUR-API-KEY",
+      "baseurl": "https://api.example.com/v1"
+    },
+    {
+      "name": "中转站 B",
+      "value": "sk-REPLACE-WITH-ANOTHER-API-KEY",
+      "baseurl": "https://relay.example.net/v1"
+    }
+  ]
+}

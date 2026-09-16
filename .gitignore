@@ -1,0 +1,18 @@
+# 依赖
+node_modules/
+
+# Playwright 调试产物（含真实中转站名称与 Base URL 快照）
+.playwright-cli/
+output/
+
+# macOS
+.DS_Store
+
+# 凭据兜底：本工具默认读写 ~/.codex，但支持 CODEX_HOME 覆盖指向
+# 项目目录。一旦指向项目内，明文 API Key 会落在仓库里，这里默认挡住。
+auth.json
+key_config.json
+relay-ui-state.json
+relay-ui-runtime/
+.env
+.env.*

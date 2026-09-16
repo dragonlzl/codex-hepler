@@ -1,0 +1,9 @@
+{
+  "name": "codex-relay-config-ui",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local web UI for managing Codex relay configurations",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

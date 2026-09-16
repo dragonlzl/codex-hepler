@@ -1,0 +1,8 @@
+{
+  "name": "managed-relay-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": { "test": "node --test test/*.test.js" },
+  "dependencies": { "toml-eslint-parser": "1.0.3", "proxy-agent": "6.5.0", "proxy-from-env": "1.1.0" },
+  "engines": { "node": ">=22.13.0" }
+}

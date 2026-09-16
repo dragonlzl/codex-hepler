@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317201e'/%3E%3Cpath d='M9 22v-7m7 7V9m7 13v-10' stroke='%23e8ad72' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <title>中转站配置</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <p class="eyebrow">CODEX TOOL</p>
+            <h1>中转站配置</h1>
+          </div>
+        </div>
+        <div class="status-pill"><span class="status-dot"></span><span id="connection-status">正在连接</span></div>
+      </header>
+
+      <main>
+        <section class="intro-row">
+          <div>
+            <p class="section-kicker">API ROUTES</p>
+            <h2>管理你的中转站</h2>
+            <p class="intro-copy">查看当前配置，或添加一个新的 API 入口。</p>
+          </div>
+          <div class="total-block"><strong id="total-count">—</strong><span>个中转站</span></div>
+        </section>
+
+        <section class="workspace-grid">
+          <section class="panel list-panel" aria-labelledby="list-title">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">CURRENT ROUTES</p>
+                <h3 id="list-title">已保存配置</h3>
+              </div>
+              <label class="search-box" aria-label="搜索中转站">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4.5 4.5"></path></svg>
+                <input id="search-input" type="search" placeholder="搜索名称或地址" autocomplete="off" />
+              </label>
+            </div>
+            <div id="key-list" class="key-list" aria-live="polite"></div>
+            <div id="empty-state" class="empty-state" hidden>
+              <div class="empty-icon" aria-hidden="true">+</div>
+              <p>没有匹配的中转站</p>
+            </div>
+          </section>
+
+          <section class="panel add-panel" aria-labelledby="add-title">
+            <div class="panel-head add-head">
+              <div>
+                <p class="section-kicker">NEW ROUTE</p>
+                <h3 id="add-title">新增中转站</h3>
+              </div>
+              <div class="plus-badge" aria-hidden="true">+</div>
+            </div>
+            <form id="add-form" novalidate>
+              <label class="field">
+                <span>名称</span>
+                <input name="name" type="text" placeholder="例如：团队共享" maxlength="200" required />
+              </label>
+              <label class="field">
+                <span>API Key</span>
+                <div class="secret-input">
+                  <input id="value-input" name="value" type="password" placeholder="sk-..." maxlength="2000" autocomplete="new-password" required />
+                  <button id="toggle-new-key" class="icon-button" type="button" title="显示或隐藏 API Key" aria-label="显示或隐藏 API Key">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg>
+                  </button>
+                </div>
+              </label>
+              <label class="field">
+                <span>Base URL</span>
+                <input name="baseurl" type="url" placeholder="https://api.example.com/v1" maxlength="2000" required />
+              </label>
+              <button id="submit-button" class="primary-button" type="submit"><span>保存配置</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"></path></svg></button>
+              <p id="form-message" class="form-message" role="status"></p>
+            </form>
+          </section>
+        </section>
+      </main>
+
+      <footer><span>本地配置管理</span><span class="footer-line"></span><span>数据写入 ~/.codex/key_config.json</span></footer>
+    </div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
