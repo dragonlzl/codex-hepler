@@ -38,6 +38,8 @@
 
 先确认页面上的「CODEX 目录」指向你的 Codex 配置目录（默认 `~/.codex`）。如果不是，填入正确路径后点「保存目录」；这个设置会持久保存，之后不用再改。详见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md)。
 
+> 把本工具复制到其他项目时，与其每次重填，不如在项目根目录的 `codex-relay.config.json` 里写死 `codexHome` 和 `codexAppPath`，两个入口都会读取它。详见 [项目配置文件](MANAGED-RELAY-README.md#项目配置文件-codex-relayconfigjson)。
+
 1. 进入项目目录，在终端启动管理服务：
 
    macOS：
@@ -75,6 +77,10 @@
    ```
 
    这个脚本只为新启动的 Codex 进程加入 `NO_PROXY` 和 `no_proxy`，确保 `127.0.0.1`、`localhost`、`::1` 直连；不会修改 FlyingBird 或系统代理。它只用 Node 内置模块，不需要安装 npm 依赖。
+
+   Windows 上窗口会在脚本结束时停住（`pause`），报错信息不会一闪而过；自动化调用可先设 `RELAY_NO_PAUSE=1`。脚本同时会把控制台切到 UTF-8，中文提示不会变成乱码。
+
+   如果提示「未找到 Codex 桌面应用」，见 [CODEX-LOCAL-NETWORK.md](CODEX-LOCAL-NETWORK.md#应用不在默认位置)：可以设 `CODEX_APP_PATH`，也可以直接在项目根目录的 `codex-relay.config.json` 里填 `codexAppPath`。
 
 ## 使用 FlyingBird 测试
 

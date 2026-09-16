@@ -20,7 +20,7 @@ sh start-managed-relay.sh
 
 不同设备的 Codex 配置目录可能不同。页面「CODEX 目录」用来指定和查看当前使用的目录。
 
-目录优先级：**启动参数 > `CODEX_HOME` 环境变量 > 页面保存的目录 > 默认 `~/.codex`**。前两种属于外部显式指定，此时页面输入框锁定为只读，也**不会**读写设置文件。同理，只用 `options.home` 或 `CODEX_HOME` 时不影响页面上保存过的设置。
+目录优先级：**启动参数 > `CODEX_HOME` 环境变量 > 项目 JSON 配置文件 > 页面保存的目录 > 默认 `~/.codex`**。前三种属于外部显式指定，此时页面输入框锁定为只读，也**不会**读写设置文件。同理，只用 `options.home` 或 `CODEX_HOME` 时不影响页面上保存过的设置。
 
 - **立即生效**：保存后当前进程内的中转站列表、provider 身份、出站设置全部切到新目录，无需重启服务；已建立的 SSE/WebSocket 连接不受影响。
 - **持久保存**：设置写在 `~/.config/codex-relay-ui/settings.json`（Windows 为 `%APPDATA%\codex-relay-ui\settings.json`），权限 `0600`，只存路径。刷新页面、重启服务后仍然生效。
@@ -30,6 +30,29 @@ sh start-managed-relay.sh
 - **缺失的 `key_config.json` 会自动补一个空列表**，新设备上可以直接开始使用；创建结果会在页面提示中说明。
 
 切换目录会让本地代理改为读取新目录下选中的中转站。如果 Codex 已经接入本地代理，切换前请确认新目录里的路由符合预期。
+
+## 项目配置文件 codex-relay.config.json
+
+把本工具复制到另一个项目或另一台机器时，不必再改环境变量：在**项目根目录**放一个 `codex-relay.config.json`，把 Codex 的位置写进去。管理服务和 `start-codex-local.*` 都读同一个文件。
+
+```json
+{
+  "codexAppPath": "C:\\Users\\you\\AppData\\Local\\Programs\\Codex\\Codex.exe",
+  "codexHome": "C:\\Users\\you\\.codex"
+}
+```
+
+| 字段 | 含义 | 留空时 |
+| --- | --- | --- |
+| `codexAppPath` | Codex **桌面应用**位置：Windows 填 `Codex.exe` 或它所在目录，macOS 填 `.app` 目录 | 按平台自动探测常见安装位置 |
+| `codexHome` | Codex **配置目录**（含 `config.toml`、`key_config.json`） | 用页面保存的目录，再回退到 `~/.codex` |
+
+- 两个字段都可以省略，文件也可以完全不存在。也支持 `codex_app_path` / `codex_home` 这种下划线写法，值里的 `~` 和 `%LOCALAPPDATA%` 会自动展开。
+- 查找顺序：`CODEX_TOOL_CONFIG` 指定的路径 > 项目根目录 > `~/.config/codex-relay-ui/`（Windows 为 `%APPDATA%\codex-relay-ui\`）。
+- 优先级：`CODEX_APP_PATH` / `CODEX_HOME` 环境变量仍然高于配置文件，方便临时覆盖。
+- `codexHome` 生效时页面输入框锁定，并提示「由 JSON 配置文件指定」；要改目录请编辑这个文件。
+- 文件损坏或字段类型不对时会静默回退到自动探测，不会让服务起不来。
+- **仓库里只提交 `codex-relay.config.example.json`**，本机的 `codex-relay.config.json` 已在 `.gitignore` 中忽略，避免把本机用户名和路径带进版本库。
 
 ## 接入和恢复
 

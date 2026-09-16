@@ -3,6 +3,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
+const { configPath, loadCodexConfig, resolveCodexPaths, configHint } = require('./codex-config');
 
 const run = promisify(execFile);
 const LOCAL_HOSTS = ['127.0.0.1', 'localhost', '::1'];
@@ -28,12 +29,28 @@ async function macAppInfo(app) {
   return { app, executable: path.join(app, 'Contents', 'MacOS', executable) };
 }
 
-async function findMacApp() {
-  if (process.env.CODEX_APP_PATH) return macAppInfo(path.resolve(process.env.CODEX_APP_PATH));
-  for (const app of MAC_APP_CANDIDATES) {
-    try { await fs.access(app); return await macAppInfo(app); } catch { /* Try the other app name. */ }
+// 路径写错时给一句人能看懂的提示，而不是 PlistBuddy／ENOENT 的原始报错。
+async function macAppInfoOrExplain(app, env, config) {
+  try {
+    return await macAppInfo(app);
+  } catch {
+    const source = config && resolveCodexPaths({ env, config }).appSource === 'env'
+      ? 'CODEX_APP_PATH 环境变量' : `配置文件 ${configPath(env)} 里的 codexAppPath`;
+    throw new Error(`指定的 Codex 应用不可用：${app}。请确认该目录存在且是 Codex 的 .app（检查 ${source}）。`);
   }
-  throw new Error('未找到 Codex 应用。可使用 CODEX_APP_PATH 指定应用位置。');
+}
+
+// config 传入对象（可为空对象）时以它为准，传 null 才读磁盘上的 JSON 配置文件。
+// 这样调用方和测试都能完全绕过配置文件。
+async function findMacApp(options = {}) {
+  const { env = process.env, config = null, access = fs.access } = options;
+  const fileConfig = config !== null ? config : loadCodexConfig(configPath(env));
+  const explicit = resolveCodexPaths({ env, config: fileConfig }).appPath;
+  if (explicit) return macAppInfoOrExplain(explicit, env, fileConfig);
+  for (const app of MAC_APP_CANDIDATES) {
+    try { await access(app); return await macAppInfo(app); } catch { /* Try the other app name. */ }
+  }
+  throw new Error('未找到 Codex 应用。可使用 CODEX_APP_PATH 指定应用位置，' + configHint(env));
 }
 
 async function macAppRunning(executable) {
@@ -57,7 +74,8 @@ async function macLaunch(app, args) {
 // -------------------------------------------------------------- Windows
 
 // Codex 桌面应用在 Windows 上没有固定的公开安装位置，这里按常见布局探测。
-// 探测失败时可用 CODEX_APP_PATH 直接指向 Codex.exe。
+// 也可以设置 CODEX_APP_PATH，或在项目 JSON 配置文件里填 codexAppPath，
+// 指向 Codex.exe 本身或它所在的目录。
 const WIN_APP_CANDIDATES = [
   ['LOCALAPPDATA', 'Programs', 'Codex', 'Codex.exe'],
   ['LOCALAPPDATA', 'Programs', 'ChatGPT', 'ChatGPT.exe'],
@@ -67,21 +85,32 @@ const WIN_APP_CANDIDATES = [
   ['PROGRAMFILES', 'ChatGPT', 'ChatGPT.exe'],
 ];
 
-async function findWinApp() {
-  if (process.env.CODEX_APP_PATH) {
-    const target = path.resolve(process.env.CODEX_APP_PATH);
-    const executable = (await fs.stat(target)).isDirectory() ? path.join(target, 'Codex.exe') : target;
-    await fs.access(executable);
+async function findWinApp(options = {}) {
+  const { env = process.env, config = null, access = fs.access, stat = fs.stat } = options;
+  const fileConfig = config !== null ? config : loadCodexConfig(configPath(env));
+  const explicit = resolveCodexPaths({ env, config: fileConfig }).appPath;
+  if (explicit) {
+    // 路径写错时给出可操作的提示，而不是裸的 ENOENT。
+    const source = resolveCodexPaths({ env, config: fileConfig }).appSource === 'env'
+      ? 'CODEX_APP_PATH 环境变量' : `配置文件 ${configPath(env)} 里的 codexAppPath`;
+    let executable;
+    try {
+      executable = (await stat(explicit)).isDirectory() ? path.join(explicit, 'Codex.exe') : explicit;
+      await access(executable);
+    } catch {
+      throw new Error(`指定的 Codex 应用不可用：${explicit}。请确认路径存在，指向 Codex.exe 或它所在的目录（检查 ${source}）。`);
+    }
     return { app: executable, executable };
   }
   for (const segments of WIN_APP_CANDIDATES) {
-    const base = process.env[segments[0]];
+    const base = env[segments[0]];
     if (!base) continue;
     const executable = path.join(base, ...segments.slice(1));
-    try { await fs.access(executable); return { app: executable, executable }; } catch { /* Try the next layout. */ }
+    try { await access(executable); return { app: executable, executable }; } catch { /* Try the next layout. */ }
   }
   throw new Error(
-    '未找到 Codex 桌面应用。请设置 CODEX_APP_PATH 指向 Codex.exe；'
+    '未找到 Codex 桌面应用。请设置 CODEX_APP_PATH 指向 Codex.exe，'
+    + `或编辑配置文件 ${configPath(env)} 填写 codexAppPath；`
     + '如果你使用的是 Codex CLI，无需此入口，在终端设置 NO_PROXY 后直接运行 codex 即可。'
   );
 }
@@ -92,10 +121,11 @@ async function winAppRunning(executable) {
   return stdout.toLowerCase().includes(`"${name.toLowerCase()}"`);
 }
 
-async function winInheritedBypass() {
+async function winInheritedBypass(env = process.env) {
   const inherited = [];
   // Windows GUI 进程的环境来自用户级环境变量，只读查询，不做修改。
   for (const key of ['NO_PROXY', 'no_proxy']) {
+    if (env[key]) { inherited.push(env[key]); continue; }
     try {
       const { stdout } = await run('reg', ['query', 'HKCU\\Environment', '/v', key], { timeout: 2000 });
       const match = stdout.match(/REG_(?:SZ|EXPAND_SZ)\s+(.+)/);
@@ -146,33 +176,49 @@ const PLATFORMS = {
     quitHint: '请在本轮回复结束后从托盘完全退出' },
 };
 
-async function launch() {
+// 配置文件是可选的：存在就把来源写进日志，方便用户确认到底读了哪个文件。
+function describeConfig(env = process.env, config = null) {
+  const fileConfig = config !== null ? config : loadCodexConfig(configPath(env));
+  const resolved = resolveCodexPaths({ env, config: fileConfig });
+  const fields = [
+    resolved.appPath ? `codexAppPath=${resolved.appPath}（来自${resolved.appSource === 'env' ? '环境变量' : '配置文件'}）` : null,
+    resolved.home ? `codexHome=${resolved.home}（来自${resolved.homeSource === 'env' ? '环境变量' : '配置文件'}）` : null,
+  ].filter(Boolean);
+  if (!fields.length) return null;
+  return `配置文件 ${resolved.configFile}：${fields.join('；')}`;
+}
+
+async function launch(options = {}) {
+  const env = options.env || process.env;
+  const argv = options.argv || process.argv.slice(2);
   const platform = PLATFORMS[process.platform];
   if (!platform) throw new Error('此启动入口仅支持 macOS 和 Windows。');
-  if (process.argv.slice(2).some(arg => arg !== '--check')) throw new Error('支持的参数：--check（仅检查，不启动）。');
-  const check = process.argv.includes('--check');
-  const app = await platform.findApp();
+  if (argv.some(arg => arg !== '--check')) throw new Error('支持的参数：--check（仅检查，不启动）。');
+  const check = argv.includes('--check');
+  const app = await platform.findApp({ env });
   const running = await platform.isRunning(app.executable);
   if (running && !check) throw new Error(`Codex 正在运行。${platform.quitHint}，再运行此脚本。`);
-  const port = Number(process.env.RELAY_UI_PORT || 3790);
+  const port = Number(env.RELAY_UI_PORT || 3790);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('RELAY_UI_PORT 无效。');
   const status = await relayStatus(port);
   if (!status.proxyInstalled || status.mode !== 'proxy') throw new Error('Codex 尚未接入本地代理，请先在管理页面接入。');
   const url = new URL(status.proxyUrl);
   if (url.hostname !== '127.0.0.1' || url.protocol !== 'http:') throw new Error('本地代理地址不符合此启动入口要求。');
-  const inherited = await platform.inheritedBypass();
-  const bypass = bypassList(process.env.NO_PROXY, process.env.no_proxy, ...inherited);
+  const inherited = await platform.inheritedBypass(env);
+  const bypass = bypassList(env.NO_PROXY, env.no_proxy, ...inherited);
   if (check) {
+    const config = describeConfig(env);
+    if (config) console.log(config);
     console.log('检查通过：中转服务可用，Codex 已配置本地代理。');
     console.log(running ? 'Codex 当前仍在运行；此检查不会改变现有进程环境。' : 'Codex 已退出，可以启动。');
     console.log('启动时将为 Codex 设置 NO_PROXY / no_proxy，包含 127.0.0.1、localhost、::1。');
     return;
   }
-  if (process.platform === 'darwin') await platform.launch(app, launchArguments(app.app, [process.env.NO_PROXY, process.env.no_proxy, ...inherited]));
+  if (process.platform === 'darwin') await platform.launch(app, launchArguments(app.app, [env.NO_PROXY, env.no_proxy, ...inherited]));
   else await platform.launch(app, bypass);
   console.log('已请求启动 Codex，本机绕过规则随本次进程生效。');
   console.log('中转服务继续负责上游网络；FlyingBird 和系统代理设置未修改。');
 }
 
 if (require.main === module) launch().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { bypassList, launchArguments, relayStatus };
+module.exports = { bypassList, launchArguments, relayStatus, findWinApp, findMacApp, describeConfig, launch };

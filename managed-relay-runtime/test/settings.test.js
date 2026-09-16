@@ -16,19 +16,23 @@ async function tempHome(t, { config = true, keys = true } = {}) {
   return home;
 }
 
-// 让 start() 走"设置文件"分支，同时保证测试绝不读写真实用户的配置目录。
+// 让 start() 走"设置文件"分支，同时保证测试绝不读写真实用户的配置目录，
+// 也不读取仓库里的 codex-relay.config.json。
 async function isolatedSettings(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-settings-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'settings.json');
-  const previous = { settings: process.env.RELAY_UI_SETTINGS, codex: process.env.CODEX_HOME };
+  const config = path.join(dir, 'codex-relay.config.json');
+  const previous = { settings: process.env.RELAY_UI_SETTINGS, codex: process.env.CODEX_HOME, tool: process.env.CODEX_TOOL_CONFIG };
   process.env.RELAY_UI_SETTINGS = file;
+  process.env.CODEX_TOOL_CONFIG = config;
   delete process.env.CODEX_HOME;
   t.after(() => {
     if (previous.settings === undefined) delete process.env.RELAY_UI_SETTINGS; else process.env.RELAY_UI_SETTINGS = previous.settings;
     if (previous.codex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous.codex;
+    if (previous.tool === undefined) delete process.env.CODEX_TOOL_CONFIG; else process.env.CODEX_TOOL_CONFIG = previous.tool;
   });
-  return file;
+  return { file, config };
 }
 
 const status = app => fetch(app.uiUrl + '/api/status').then(response => response.json());
@@ -47,7 +51,7 @@ test('settings file is stored outside the Codex directory and honours RELAY_UI_S
 });
 
 test('readSettings tolerates a missing or corrupt settings file', async t => {
-  const file = await isolatedSettings(t);
+  const { file } = await isolatedSettings(t);
   assert.deepEqual(await readSettings(), {});
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, '{ not json');
@@ -98,7 +102,7 @@ test('resolveHome creates a missing key_config.json so a new device can start', 
 });
 
 test('saved Codex directory survives a restart and can be switched from the page', async t => {
-  const settingsFile = await isolatedSettings(t);
+  const { file: settingsFile } = await isolatedSettings(t);
   const homeA = await tempHome(t);
   const homeB = await tempHome(t, { keys: false });
   await fs.writeFile(settingsFile, JSON.stringify({ home: homeA }));
@@ -129,7 +133,7 @@ test('saved Codex directory survives a restart and can be switched from the page
 });
 
 test('an explicit home locks the page control and never writes the settings file', async t => {
-  const settingsFile = await isolatedSettings(t);
+  const { file: settingsFile } = await isolatedSettings(t);
   const homeA = await tempHome(t);
   const homeB = await tempHome(t);
   const app = await start({ home: homeA, proxyPort: 0, uiPort: 0, log: () => {} });
@@ -152,4 +156,41 @@ test('CODEX_HOME locks the page control and is reported as the source', async t 
   assert.equal(state.home, home);
   assert.equal(state.homeSource, 'env');
   assert.equal(state.homeLocked, true);
+});
+
+test('codexRelay config file supplies the Codex directory and locks the page control', async t => {
+  const { config } = await isolatedSettings(t);
+  const home = await tempHome(t);
+  await fs.writeFile(config, JSON.stringify({ codexHome: home, codexAppPath: '/opt/Codex/Codex.exe' }));
+  const app = await start({ proxyPort: 0, uiPort: 0, log: () => {} });
+  t.after(() => app.close());
+  const state = await status(app);
+  assert.equal(state.home, home, '配置文件里的目录应生效，不需要在页面重新填写');
+  assert.equal(state.homeSource, 'config');
+  assert.equal(state.homeLocked, true);
+  assert.equal(state.configPath, config);
+  assert.equal(state.codexAppPath, '/opt/Codex/Codex.exe');
+  const rejected = await post(app, '/api/home', { home: home });
+  assert.equal(rejected.status, 409, '配置文件指定时页面不能改目录');
+});
+
+test('CODEX_HOME still outranks the config file directory', async t => {
+  await isolatedSettings(t);
+  const fromEnv = await tempHome(t);
+  const fromFile = await tempHome(t);
+  process.env.CODEX_HOME = fromEnv;
+  // 绕开真实配置文件，直接替换 start() 内部的配置文件读取结果。
+  const Module = require('node:module');
+  const original = Module._load;
+  Module._load = function (request) {
+    const loaded = original.apply(this, arguments);
+    if (request === './managed-relay-runtime/codex-config') return { ...loaded, loadCodexConfig: () => ({ codexHome: fromFile }) };
+    return loaded;
+  };
+  t.after(() => { Module._load = original; });
+  const app = await start({ proxyPort: 0, uiPort: 0, log: () => {} });
+  t.after(() => app.close());
+  const state = await status(app);
+  assert.equal(state.home, fromEnv);
+  assert.equal(state.homeSource, 'env');
 });

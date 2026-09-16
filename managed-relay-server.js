@@ -7,6 +7,7 @@ const { createProxy } = require('./managed-relay-runtime/proxy');
 const { Outbound } = require('./managed-relay-runtime/outbound');
 const { Diagnostics } = require('./managed-relay-runtime/diagnostics');
 const { settingsPath, readSettings, writeSettings, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
+const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
 
 const PUBLIC_DIR = path.join(__dirname, 'managed-relay-public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -45,13 +46,16 @@ async function start(options = {}) {
   const proxyPort = Number(options.proxyPort ?? process.env.RELAY_PROXY_PORT ?? 3211);
   const uiPort = Number(options.uiPort ?? process.env.RELAY_UI_PORT ?? 3790);
   for (const port of [proxyPort, uiPort]) if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port');
-  // 目录优先级：启动参数 > CODEX_HOME > 已保存的设置 > 默认 ~/.codex。
+  // 目录优先级：启动参数 > CODEX_HOME > 项目 JSON 配置文件 > 已保存的设置 > 默认 ~/.codex。
   // 前两者视为外部显式指定，此时既不读也不写设置文件，避免污染用户配置。
+  // 配置文件是随项目分发的，所以它比“已保存的设置”优先：换项目后不用重新填目录。
   const externalHome = options.home || process.env.CODEX_HOME || null;
-  const savedHome = externalHome ? null : (await readSettings()).home;
-  const initialHome = externalHome || savedHome || path.join(os.homedir(), '.codex');
-  const homeLocked = Boolean(externalHome);
-  const homeSource = options.home ? 'argument' : process.env.CODEX_HOME ? 'env' : savedHome ? 'saved' : 'default';
+  const fileConfig = loadCodexConfig(configPath(process.env));
+  const paths = resolveCodexPaths({ env: process.env, config: fileConfig });
+  const savedHome = externalHome || paths.home ? null : (await readSettings()).home;
+  const initialHome = externalHome || paths.home || savedHome || path.join(os.homedir(), '.codex');
+  const homeLocked = Boolean(externalHome || paths.home);
+  const homeSource = options.home ? 'argument' : process.env.CODEX_HOME ? 'env' : paths.home ? 'config' : savedHome ? 'saved' : 'default';
   const settingsFile = settingsPath();
 
   const build = (target, injected) => {
@@ -82,15 +86,19 @@ async function start(options = {}) {
     lastRequest = entry;
     record({ event: 'relay_request', ...entry });
   }, options.timeoutMs, outbound, options.connectTimeoutMs, entry => record({ event: 'relay_request_started', ...entry }));
+  const lockReason = externalHome
+    ? '当前目录由环境变量或启动参数指定，不能在页面修改。'
+    : `当前目录由 JSON 配置文件指定，不能在页面修改。请编辑 ${displayPath(paths.configFile)} 里的 codexHome。`;
   const status = async () => {
     const current = await store.status();
     const entry = current.keys.find(item => item.name === current.selectedProxyName);
     return { ...current, home: displayPath(holder.home), homeSource, homeLocked, settingsPath: displayPath(settingsFile),
+      configPath: displayPath(paths.configFile), codexAppPath: paths.appPath ? displayPath(paths.appPath) : null,
       lastRequest, lastDiagnostic, diagnosticsAvailable: true, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
   const switchHome = async target => {
-    if (homeLocked) throw problem('当前目录由环境变量或启动参数指定，不能在页面修改。', 409);
+    if (homeLocked) throw problem(lockReason, 409);
     const { home: resolved, created } = await resolveHome(target);
     const next = build(resolved);
     next.store.proxyUrl = 'http://127.0.0.1:' + proxy.address().port + '/v1';

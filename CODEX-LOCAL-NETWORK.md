@@ -37,7 +37,9 @@ sh start-codex-local.sh
 start-codex-local.cmd
 ```
 
-双击运行时窗口会闪退，属正常现象（脚本只负责启动 Codex 后退出）。
+脚本结束前会 `pause`：无论成功还是报错（例如找不到 Codex 应用），窗口都会停住等你看完再按键关闭。自动化调用时可先设置 `RELAY_NO_PAUSE=1` 跳过。
+
+脚本会把控制台切到 UTF-8 代码页（`chcp 65001`），中文提示不会显示成乱码。
 
 ### 只检查、不启动
 
@@ -48,10 +50,26 @@ start-codex-local.cmd --check        # Windows
 
 ### 应用不在默认位置
 
-用 `CODEX_APP_PATH` 指定：
+按下面的顺序生效：
+
+1. 环境变量 `CODEX_APP_PATH`
+2. 项目根目录 `codex-relay.config.json` 里的 `codexAppPath`
+3. 各平台自动探测的常见位置
+
+`CODEX_APP_PATH` 的写法：
 
 - macOS：指向 `.app` 目录（例如 `/Applications/ChatGPT.app`）
 - Windows：指向 `Codex.exe`，或它所在的目录
+
+没有环境变量时，把路径写进项目根目录的 JSON 配置文件，换项目、换机器时都不用再设环境变量：
+
+```json
+{
+  "codexAppPath": "C:\\Users\\you\\AppData\\Local\\Programs\\Codex\\Codex.exe"
+}
+```
+
+同目录的 `codex-relay.config.example.json` 是模板；本机的 `codex-relay.config.json` 不会进版本库。字段说明见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md#项目配置文件-codex-relayconfigjson)。
 
 Windows 上会先自动探测以下位置，都找不到才需要设置：
 
@@ -88,7 +106,7 @@ codex
 
 **只需要 Node.js 22.13 或更高版本，不需要安装任何 npm 包。**
 
-本入口直接运行 `managed-relay-runtime/codex-launch.js`，它只使用 Node 内置模块（`node:fs`、`node:path`、`node:http`、`node:child_process`、`node:util`），**不依赖 `node_modules`**。所以即使从未执行过 `npm ci`，这个入口也能正常工作。
+本入口直接运行 `managed-relay-runtime/codex-launch.js`，它只使用 Node 内置模块（`node:fs`、`node:path`、`node:http`、`node:child_process`、`node:util`），读取 JSON 配置文件用的 `codex-config.js` 同样只用内置模块，**不依赖 `node_modules`**。所以即使从未执行过 `npm ci`，这个入口也能正常工作。
 
 安装 Node.js：从 <https://nodejs.org> 下载 LTS 安装包。装完**新开一个终端**（PATH 只在新窗口生效），确认：
 
@@ -102,10 +120,23 @@ node --version     # 应输出 v22.13.0 或更高
 
 此处重启一次 Codex 是为了让其继承进程级绕过规则。之后在本地代理模式切换中转无需重启。规则只随本次启动生效；完全退出后从 Dock 或开始菜单普通启动不会带有这些规则，可再次使用本入口启动。
 
+用 `--check` 时若读到了 JSON 配置文件，会先打印一行来源说明，例如：
+
+```
+配置文件 C:\Tools\codex-relay.config.json：codexAppPath=C:\Tools\Codex\Codex.exe（来自配置文件）
+```
+
+## 常见报错
+
+- **未找到 Codex 桌面应用**：先确认路径写对，再按上面的顺序设置 `CODEX_APP_PATH` 或 `codexAppPath`。报错信息里会带上实际读取的配置文件路径，照着改即可。
+- **指定的 Codex 应用不可用**：环境变量或配置文件里的路径不存在，或者指向的不是 Codex（Windows 需要指向 `Codex.exe` 或其所在目录，macOS 需要 `.app`）。
+- **Codex 尚未接入本地代理**：先在管理页面点击「接入本地代理」，再运行本入口。
+- **中转服务未响应**：管理服务没在运行，或端口被 `RELAY_UI_PORT` 改过而这里没同步。
+
 ## 验证范围
 
 已使用本机 Codex 二进制、隔离 CODEX_HOME、模拟 HTTP 代理和模拟上游验证：不设置 NO_PROXY 时，本机模型请求进入模拟代理；设置后直达本机上游。没有开启 FlyingBird。真实 macOS 系统代理与 FlyingBird 场景仍需现场验证。
 
-**Windows 分支尚未在真实 Windows 上实测。** 已在本机验证平台分发、`CODEX_APP_PATH` 的文件／目录两种形式和候选路径探测；`tasklist` 进程检测、`reg query` 环境读取和实际启动行为需要到 Windows 上确认。首次使用请先运行 `--check`。
+**Windows 分支尚未在真实 Windows 上实测。** 已在本机验证平台分发、`CODEX_APP_PATH`／配置文件两种来源的文件与目录形式、候选路径探测、路径错误时的提示文案，以及 `.cmd` 的 `chcp 65001` + `pause` 文本；`tasklist` 进程检测、`reg query` 环境读取和实际启动行为需要到 Windows 上确认。首次使用请先运行 `--check`。
 
 检查日志应出现 `relay_request_started`；如果有开始记录，再根据对应结束记录的 `outbound`、`upstreamStatus` 和 `responseBytes` 判断上游路径。顶部网络状态是当前路由，下方带时间的检查结果是历史检查，关闭 VPN 后两者可能不同。

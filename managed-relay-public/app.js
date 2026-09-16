@@ -75,10 +75,12 @@ function renderHome() {
   const source = state.homeSource === 'saved' ? '（已保存，重启服务后仍生效）'
     : state.homeSource === 'arg' || state.homeSource === 'argument' ? '（由启动参数指定，页面不能修改）'
       : state.homeSource === 'env' ? '（由 CODEX_HOME 环境变量指定，页面不能修改）'
-        : '（默认位置，保存后会记住）';
+        : state.homeSource === 'config' ? '（由 JSON 配置文件指定，页面不能修改）'
+          : '（默认位置，保存后会记住）';
+  const app = state.codexAppPath ? ` · Codex 应用：${state.codexAppPath}` : '';
   document.querySelector('#home-status').textContent = !state.home
     ? '尚未读取到目录设置。'
-    : `当前目录：${state.home}${source} · 设置文件：${state.settingsPath || '—'}`;
+    : `当前目录：${state.home}${source} · 设置文件：${state.settingsPath || '—'}${app}`;
 }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }

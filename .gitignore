@@ -5,6 +5,9 @@ node_modules/
 .playwright-cli/
 output/
 
+# 本机路径配置（仓库里保留 codex-relay.config.example.json 作为模板）
+codex-relay.config.json
+
 # macOS
 .DS_Store
 

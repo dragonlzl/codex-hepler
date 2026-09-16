@@ -22,6 +22,26 @@
 
 管理服务的行为见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md)，Codex 启动入口见 [CODEX-LOCAL-NETWORK.md](CODEX-LOCAL-NETWORK.md)，故障排查见 [START-HOWTO.md](START-HOWTO.md)。
 
+## 项目配置文件 `codex-relay.config.json`
+
+把工具复制到其他项目使用时，不必每次重新填写路径。在**项目根目录**放一个 `codex-relay.config.json`（模板见 [`codex-relay.config.example.json`](codex-relay.config.example.json)）：
+
+```json
+{
+  "codexAppPath": "C:\\Users\\you\\AppData\\Local\\Programs\\Codex\\Codex.exe",
+  "codexHome": "C:\\Users\\you\\.codex"
+}
+```
+
+- `codexAppPath`：Codex 桌面应用位置，解决「未找到 Codex 桌面应用」并让 `start-codex-local.*` 能找到应用。Windows 填 `Codex.exe` 或它所在目录，macOS 填 `.app` 目录。
+- `codexHome`：Codex 配置目录（含 `config.toml`、`key_config.json`），等价于在页面上保存「CODEX 目录」，但随项目分发。
+- 两个字段都可以省略，环境变量 `CODEX_APP_PATH` / `CODEX_HOME` 仍优先于它们；留空时按各自平台自动探测。
+- 本机的 `codex-relay.config.json` 已在 `.gitignore` 中忽略，**只有 `codex-relay.config.example.json` 会进版本库**。
+
+完整字段说明和查找顺序见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md#项目配置文件-codex-relayconfigjson)。
+
+> Windows 上两个 `.cmd` 会先把控制台切到 UTF-8（`chcp 65001`）并在结束前 `pause`，中文不再乱码，报错也不会一闪而过。自动化调用时先设 `RELAY_NO_PAUSE=1` 可跳过等待。
+
 ---
 
 # `key_config.json` 使用须知
@@ -34,10 +54,10 @@
 
 | 入口 | 读取路径 | 能否自定义 |
 | --- | --- | --- |
-| 完整版 | 优先 `CODEX_HOME`，否则用页面保存的目录，都没有时回退到 `~/.codex` | 可以：**在页面的「CODEX 目录」里填写并保存**，或设 `CODEX_HOME` 环境变量 |
+| 完整版 | 优先 `CODEX_HOME`，其次项目配置文件里的 `codexHome`，否则用页面保存的目录，都没有时回退到 `~/.codex` | 可以：**在页面的「CODEX 目录」里填写并保存**，或在 `codex-relay.config.json` 里填 `codexHome`，或设 `CODEX_HOME` 环境变量 |
 | 基础版 | 优先 `CODEX_HOME`，否则 `~/.codex/key_config.json` | 只能设 `CODEX_HOME` 环境变量，页面上不能改 |
 
-> 基础版没有页面设置目录的功能，也不读取页面保存的目录。**跨机器使用请用完整版。**
+> 基础版没有页面设置目录的功能，也不读取页面保存的目录和项目配置文件。**跨机器使用请用完整版。**
 
 ### 在页面上切换 Codex 目录
 
@@ -55,7 +75,7 @@
 
   设置文件**故意放在 Codex 目录之外**——它记录的就是 Codex 目录的位置，存进去会变成死循环。它只有 `0600` 权限，且只存路径，不存任何密钥。
 
-- 目录优先级：**启动参数 > `CODEX_HOME` 环境变量 > 页面保存的目录 > 默认 `~/.codex`**。用前两种方式指定时，页面上的输入框会被锁定（避免环境变量和页面设置互相打架）。
+- 目录优先级：**启动参数 > `CODEX_HOME` 环境变量 > `codex-relay.config.json` 的 `codexHome` > 页面保存的目录 > 默认 `~/.codex`**。用前三种方式指定时，页面上的输入框会被锁定（避免多处设置互相打架），页面上会标注来源。
 - 保存前会校验目标目录：必须存在，且包含 `config.toml`（否则拒绝并给出原因）。**如果目标目录缺少 `key_config.json`，会自动创建一个空的**，方便在新设备上直接开始使用。
 - 需要用独立目录做测试时，可以设 `RELAY_UI_SETTINGS` 环境变量把设置文件指到别处。
 

@@ -1,0 +1,5 @@
+{
+  "$comment": "本文件可复制为同目录下的 codex-relay.config.json 后按需修改。字段可全部省略，省略时按平台自动探测。",
+  "codexAppPath": "",
+  "codexHome": ""
+}
