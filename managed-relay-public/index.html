@@ -55,7 +55,10 @@
           <p id="network-result" role="status" aria-live="polite"></p>
         </section>
         <section class="content-grid">
-          <section class="panel"><div class="panel-head"><div><p class="kicker">STEP 4 · AVAILABLE ROUTES</p><h3>中转站列表</h3><p id="list-feedback" class="panel-hint" role="status" aria-live="polite"></p></div><span id="count" class="count">—</span></div><div id="route-list" class="route-list"></div></section>
+          <section class="panel"><div class="panel-head"><div><p class="kicker">STEP 4 · AVAILABLE ROUTES</p><h3>中转站列表</h3><p id="list-feedback" class="panel-hint" role="status" aria-live="polite"></p></div><span id="count" class="count">—</span></div>
+            <div class="availability-toolbar"><label for="availability-model">可用性模型<select id="availability-model" disabled><option value="gpt-6-astra">gpt-6-astra</option><option value="gpt-5.6-sol">gpt-5.6-sol</option></select></label><span>15 秒刷新</span></div>
+            <div id="route-list" class="route-list"></div>
+          </section>
           <aside class="panel add-panel"><div class="panel-head"><div><p class="kicker">NEW ROUTE</p><h3>新增中转站</h3></div><span class="plus">+</span></div><form id="add-form"><label>名称<input name="name" placeholder="例如：团队共享" autocomplete="organization" required /></label><label>API Key<input name="value" type="password" placeholder="sk-..." autocomplete="new-password" required /></label><label>Base URL<input name="baseurl" type="url" placeholder="https://api.example.com/v1" required /></label><button class="primary" type="submit">保存配置 <span>→</span></button><p id="form-message" class="message"></p></form></aside>
         </section>
       </main>
@@ -71,6 +74,7 @@
         <div class="edit-actions"><button id="edit-cancel" type="button">取消</button><button id="edit-save" class="secondary" type="submit">保存修改</button></div>
       </form>
     </dialog>
+    <script src="/availability.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

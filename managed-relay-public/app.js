@@ -29,6 +29,9 @@ let homeDirty = false;
 const appPathForm = document.querySelector('#app-path-form');
 const appPathResult = document.querySelector('#app-path-result');
 let appPathDirty = false;
+const availability = new RelayAvailability({
+  list, select: document.querySelector('#availability-model'), getState: () => state, isDragging: () => Boolean(draggedName),
+});
 
 function sourceLabel(source) {
   return ({
@@ -176,10 +179,11 @@ function render() {
       (tag ? '<span class="active-tag">' + tag + '</span>' : '') +
       '<button type="button" class="pin-button' + (entry.pinned ? ' pinned' : '') + '" data-name="' + escapeHtml(entry.name) + '" data-pinned="' + Boolean(entry.pinned) + '" aria-pressed="' + Boolean(entry.pinned) + '" title="' + (entry.pinned ? '取消置顶' : '置顶') + '" aria-label="' + (entry.pinned ? '取消置顶' : '置顶') + '"><span class="pin-icon" aria-hidden="true"></span></button>' +
       '<button type="button" class="edit-button" data-name="' + escapeHtml(entry.name) + '" title="编辑" aria-label="编辑"><span class="edit-icon" aria-hidden="true"></span></button>' +
-      '<button class="select-button" data-name="' + escapeHtml(entry.name) + '">切换</button></div></article>';
+      '<button class="select-button" data-name="' + escapeHtml(entry.name) + '">切换</button></div><div class="route-availability"></div></article>';
   }).join('');
   // Keep DOM nodes stable during polling, so drag and keyboard focus survive.
   if (markup !== renderedList && !draggedName) { list.innerHTML = markup; renderedList = markup; }
+  availability.sync();
   renderControls();
 }
 

@@ -6,6 +6,7 @@ const { ConfigStore, problem } = require('./managed-relay-runtime/config-store')
 const { createProxy } = require('./managed-relay-runtime/proxy');
 const { Outbound } = require('./managed-relay-runtime/outbound');
 const { Diagnostics } = require('./managed-relay-runtime/diagnostics');
+const { Availability } = require('./managed-relay-runtime/availability');
 const { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
 const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
 
@@ -64,9 +65,9 @@ async function start(options = {}) {
   const build = (target, injected) => {
     const store = new ConfigStore(target, 'http://127.0.0.1:' + proxyPort + '/v1');
     const outbound = injected || new Outbound(target, { localPorts: [proxyPort, uiPort] });
-    return { store, outbound, diagnostics: new Diagnostics(target) };
+    return { store, outbound, diagnostics: new Diagnostics(target), availability: new Availability(outbound, options.availabilityOptions) };
   };
-  // holder 的字段会被原地替换；下面三个 facade 让代理与请求处理器始终读到当前目录的对象。
+  // holder 的字段会被原地替换；下面的 facade 让代理与请求处理器始终读到当前目录的对象。
   const holder = { home: initialHome, ...build(initialHome, options.outbound) };
   const live = key => new Proxy({}, {
     get: (_target, prop) => {
@@ -78,6 +79,7 @@ async function start(options = {}) {
   const store = live('store');
   const outbound = live('outbound');
   const diagnostics = live('diagnostics');
+  const availability = live('availability');
   const record = entry => {
     const safe = diagnostics.record(entry);
     (options.log || console.log)(JSON.stringify(safe));
@@ -96,7 +98,7 @@ async function start(options = {}) {
     return { ...current, home: homeSource === 'default' ? displayPath(holder.home) : path.resolve(holder.home),
       homeSource, homeLocked, settingsPath: displayPath(settingsFile),
       configPath: displayPath(paths.configFile), codexAppPath: appPath || null, appPathSource, appPathLocked,
-      lastRequest, lastDiagnostic, diagnosticsAvailable: true, network: await outbound.status(entry?.baseurl) };
+      lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
   let savingPaths = false;
@@ -114,17 +116,18 @@ async function start(options = {}) {
       const fromConfig = homeSource === 'config';
       if (fromConfig) await writeConfigHome(paths.configFile, resolved);
       else await writeSettings({ home: resolved });
-      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics };
+      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics, availability: holder.availability };
       Object.assign(holder, { home: resolved, ...next });
       next = null;
       homeSource = fromConfig ? 'config' : 'saved';
+      previous.availability.close();
       previous.outbound.close();
       await previous.diagnostics.close();
       lastRequest = null;
       lastDiagnostic = null;
       return { message: `已切换到 ${resolved}，已保存到${fromConfig ? ' JSON 配置文件' : '目录设置'}${created ? '，并创建了空的 key_config.json' : ''}。` };
     } finally {
-      if (next) { next.outbound.close(); await next.diagnostics.close(); }
+      if (next) { next.availability.close(); next.outbound.close(); await next.diagnostics.close(); }
       savingPaths = false;
     }
   };
@@ -172,6 +175,13 @@ async function start(options = {}) {
       }
       if (req.method !== 'GET') throw problem('方法不允许。', 405);
       if (url.pathname === '/api/status') { json(res, 200, await status()); return; }
+      if (url.pathname === '/api/availability') {
+        const current = holder;
+        const monitor = current.availability;
+        const { keys } = await current.store.status();
+        json(res, 200, await monitor.snapshot(keys, url.searchParams.get('model') ?? undefined));
+        return;
+      }
       if (url.pathname === '/api/diagnostics') { json(res, 200, diagnostics.snapshot()); return; }
       const requested = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
       const file = path.resolve(PUBLIC_DIR, requested);
@@ -190,8 +200,8 @@ async function start(options = {}) {
     boundPorts = [proxy.address().port, ui.address().port];
     outbound.localPorts.add(proxy.address().port);
     outbound.localPorts.add(ui.address().port);
-  } catch (error) { await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
-  return { uiUrl, proxyUrl: store.proxyUrl, store, outbound, status, close: async () => { await close(ui); await close(proxy); outbound.close(); await diagnostics.close(); } };
+  } catch (error) { availability.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
+  return { uiUrl, proxyUrl: store.proxyUrl, store, outbound, status, close: async () => { availability.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close(); } };
 }
 
 if (require.main === module) {
