@@ -4,9 +4,12 @@ let busy = false;
 let loaded = false;
 let feedback = { phase: 'idle', message: '' };
 const list = document.querySelector('#route-list');
+const routesPanel = document.querySelector('#routes-panel');
 const listFeedback = document.querySelector('#list-feedback');
 const currentRoute = document.querySelector('#current-route');
-const currentRouteName = document.querySelector('#current-route-name');
+const currentRouteCard = document.querySelector('#current-route-card');
+const currentRouteMessage = document.querySelector('#current-route-message');
+let renderedCurrentRoute = '';
 let renderedList = '';
 let mutationVersion = 0;
 const connection = document.querySelector('#connection');
@@ -32,7 +35,7 @@ const appPathForm = document.querySelector('#app-path-form');
 const appPathResult = document.querySelector('#app-path-result');
 let appPathDirty = false;
 const availability = new RelayAvailability({
-  list, select: document.querySelector('#availability-model'), getState: () => state, isDragging: () => Boolean(draggedName),
+  list: routesPanel, select: document.querySelector('#availability-model'), getState: () => state, isDragging: () => Boolean(draggedName),
 });
 
 function sourceLabel(source) {
@@ -108,12 +111,37 @@ function renderAppPath() {
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 
+function routeMarkup(entry, featured = false) {
+  const chosen = viewMode === 'proxy' && entry.name === state.selectedProxyName;
+  const tag = featured ? '' : entry.active ? '配置选中' : chosen ? '待接入' : '';
+  return '<article class="route' + (entry.pinned ? ' is-pinned' : '') + '" data-pinned="' + Boolean(entry.pinned) + '" data-name="' + escapeHtml(entry.name) + '"><div class="drag-handle" title="拖动排序" aria-label="拖动排序">⋮⋮</div><div class="route-name"><small>名称</small>' + escapeHtml(entry.name) +
+    '</div><div class="route-field"><small>API KEY · BASE URL</small><code>' + escapeHtml(entry.maskedValue) +
+    '</code><code class="url">' + escapeHtml(entry.baseurl) + '</code></div><div class="route-actions">' +
+    (tag ? '<span class="active-tag">' + tag + '</span>' : '') +
+    '<button type="button" class="pin-button' + (entry.pinned ? ' pinned' : '') + '" data-name="' + escapeHtml(entry.name) + '" data-pinned="' + Boolean(entry.pinned) + '" aria-pressed="' + Boolean(entry.pinned) + '" title="' + (entry.pinned ? '取消置顶' : '置顶') + '" aria-label="' + (entry.pinned ? '取消置顶' : '置顶') + '"><span class="pin-icon" aria-hidden="true"></span></button>' +
+    '<button type="button" class="edit-button" data-name="' + escapeHtml(entry.name) + '" title="编辑" aria-label="编辑"><span class="edit-icon" aria-hidden="true"></span></button>' +
+    (featured ? '' : '<button class="select-button" data-name="' + escapeHtml(entry.name) + '">切换</button>') + '</div><div class="route-availability"></div></article>';
+}
+
+function renderCurrentRoute() {
+  // A pending proxy selection must not replace the configured route.
+  const entry = loaded ? state.keys.find(item => item.name === state.activeName) : null;
+  currentRoute.dataset.active = String(Boolean(entry));
+  currentRouteCard.hidden = !entry;
+  currentRouteMessage.hidden = Boolean(entry);
+  if (!entry) {
+    const message = loaded ? '未匹配到中转站' : '状态读取失败';
+    if (currentRouteMessage.textContent !== message) currentRouteMessage.textContent = message;
+  }
+  const markup = entry ? routeMarkup(entry, true) : '';
+  if (markup !== renderedCurrentRoute && !draggedName) {
+    currentRouteCard.innerHTML = markup;
+    renderedCurrentRoute = markup;
+  }
+}
+
 function renderControls() {
-  // Use the configured route, not a proxy selection that is still awaiting installation.
-  const activeName = loaded ? state.activeName : null;
-  const activeLabel = loaded ? activeName || '未匹配到中转站' : '状态读取失败';
-  currentRoute.dataset.active = String(Boolean(activeName));
-  if (currentRouteName.textContent !== activeLabel) currentRouteName.textContent = activeLabel;
+  renderCurrentRoute();
   installButton.disabled = busy || !loaded || state.writeBlocked || !state.selectedProxyName;
   restoreButton.disabled = busy || !loaded || state.writeBlocked || !state.proxyInstalled;
   installButton.hidden = viewMode !== 'proxy';
@@ -177,21 +205,11 @@ function render() {
     button.classList.toggle('active', button.dataset.mode === viewMode);
     button.setAttribute('aria-pressed', String(button.dataset.mode === viewMode));
   });
-  const markup = state.keys.map(entry => {
-    const chosen = viewMode === 'proxy' && entry.name === state.selectedProxyName;
-    const tag = entry.active ? '配置选中' : chosen ? '待接入' : '';
-    return '<article class="route' + (entry.pinned ? ' is-pinned' : '') + '" data-pinned="' + Boolean(entry.pinned) + '" data-name="' + escapeHtml(entry.name) + '"><div class="drag-handle" title="拖动排序" aria-label="拖动排序">⋮⋮</div><div class="route-name"><small>名称</small>' + escapeHtml(entry.name) +
-      '</div><div class="route-field"><small>API KEY · BASE URL</small><code>' + escapeHtml(entry.maskedValue) +
-      '</code><code class="url">' + escapeHtml(entry.baseurl) + '</code></div><div class="route-actions">' +
-      (tag ? '<span class="active-tag">' + tag + '</span>' : '') +
-      '<button type="button" class="pin-button' + (entry.pinned ? ' pinned' : '') + '" data-name="' + escapeHtml(entry.name) + '" data-pinned="' + Boolean(entry.pinned) + '" aria-pressed="' + Boolean(entry.pinned) + '" title="' + (entry.pinned ? '取消置顶' : '置顶') + '" aria-label="' + (entry.pinned ? '取消置顶' : '置顶') + '"><span class="pin-icon" aria-hidden="true"></span></button>' +
-      '<button type="button" class="edit-button" data-name="' + escapeHtml(entry.name) + '" title="编辑" aria-label="编辑"><span class="edit-icon" aria-hidden="true"></span></button>' +
-      '<button class="select-button" data-name="' + escapeHtml(entry.name) + '">切换</button></div><div class="route-availability"></div></article>';
-  }).join('');
+  const markup = state.keys.map(entry => routeMarkup(entry)).join('');
   // Keep DOM nodes stable during polling, so drag and keyboard focus survive.
   if (markup !== renderedList && !draggedName) { list.innerHTML = markup; renderedList = markup; }
-  availability.sync();
   renderControls();
+  availability.sync();
 }
 
 async function api(endpoint, payload) {
@@ -268,13 +286,14 @@ document.querySelectorAll('.mode-button').forEach(button => button.addEventListe
     render();
   }
 }));
-list.addEventListener('click', async event => {
+routesPanel.addEventListener('click', async event => {
+  const focusRoot = currentRoute.contains(event.target) ? currentRoute : list;
   const edit = event.target.closest('.edit-button');
   if (edit) {
     if (edit.disabled || busy || networkBusy || draggedName) return;
     const entry = state.keys.find(item => item.name === edit.dataset.name);
     if (!entry) return;
-    editing = { originalName: entry.name, revision: entry.revision, focusName: entry.name };
+    editing = { originalName: entry.name, revision: entry.revision, focusName: entry.name, focusRoot };
     editForm.reset();
     editForm.elements.name.value = entry.name;
     editForm.elements.baseurl.value = entry.baseurl;
@@ -287,7 +306,7 @@ list.addEventListener('click', async event => {
     if (pin.disabled || networkBusy || draggedName) return;
     const name = pin.dataset.name;
     await perform('/api/pin', { name, pinned: pin.dataset.pinned !== 'true' });
-    [...list.querySelectorAll('.pin-button')].find(button => button.dataset.name === name)?.focus({ preventScroll: true });
+    [...focusRoot.querySelectorAll('.pin-button')].find(button => button.dataset.name === name)?.focus({ preventScroll: true });
     return;
   }
   const button = event.target.closest('.select-button');
@@ -297,10 +316,11 @@ document.querySelector('#edit-cancel').addEventListener('click', () => { if (!ed
 editDialog.addEventListener('cancel', event => { if (editBusy) event.preventDefault(); });
 editDialog.addEventListener('close', () => {
   const name = editing?.focusName;
+  const focusRoot = editing?.focusRoot || list;
   editing = null;
   editForm.reset();
   editForm.elements.value.value = '';
-  [...list.querySelectorAll('.edit-button')].find(button => button.dataset.name === name)?.focus({ preventScroll: true });
+  [...focusRoot.querySelectorAll('.edit-button')].find(button => button.dataset.name === name)?.focus({ preventScroll: true });
 });
 editForm.addEventListener('submit', async event => {
   event.preventDefault();
@@ -330,7 +350,7 @@ editForm.addEventListener('submit', async event => {
     renderControls();
   }
 });
-list.addEventListener('dragstart', event => {
+routesPanel.addEventListener('dragstart', event => {
   const row = event.target.closest('.route');
   if (!row || busy || networkBusy || !loaded || state.writeBlocked || !state.listActionsAvailable) { event.preventDefault(); return; }
   draggedName = row.dataset.name;
@@ -364,7 +384,7 @@ list.addEventListener('drop', async event => {
   document.querySelectorAll('.route.dragging,.route.drop-target').forEach(row => row.classList.remove('dragging', 'drop-target'));
   await perform('/api/reorder', { names });
 });
-list.addEventListener('dragend', () => {
+routesPanel.addEventListener('dragend', () => {
   draggedName = null;
   document.querySelectorAll('.route.dragging,.route.drop-target').forEach(row => row.classList.remove('dragging', 'drop-target'));
 });

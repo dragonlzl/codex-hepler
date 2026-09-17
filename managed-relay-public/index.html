@@ -55,13 +55,14 @@
           <p id="network-result" role="status" aria-live="polite"></p>
         </section>
         <section class="content-grid">
-          <section class="panel">
+          <section id="routes-panel" class="panel">
             <div class="panel-head routes-panel-head">
               <div class="routes-heading"><p class="kicker">STEP 4 · AVAILABLE ROUTES</p><h3>中转站列表</h3></div>
               <span id="count" class="count">—</span>
-              <div id="current-route" class="current-route" role="status" aria-live="polite" aria-atomic="true" data-active="false">
-                <span class="current-route-label"><span class="current-route-dot" aria-hidden="true"></span>当前使用</span>
-                <strong id="current-route-name" class="current-route-name">正在读取…</strong>
+              <div id="current-route" class="current-route" role="region" aria-labelledby="current-route-label" data-active="false">
+                <span id="current-route-label" class="current-route-label">当前使用</span>
+                <p id="current-route-message" class="current-route-message" role="status" aria-live="polite">正在读取…</p>
+                <div id="current-route-card" hidden></div>
               </div>
               <p id="list-feedback" class="panel-hint" role="status" aria-live="polite"></p>
             </div>
