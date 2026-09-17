@@ -5,6 +5,8 @@ let loaded = false;
 let feedback = { phase: 'idle', message: '' };
 const list = document.querySelector('#route-list');
 const listFeedback = document.querySelector('#list-feedback');
+const currentRoute = document.querySelector('#current-route');
+const currentRouteName = document.querySelector('#current-route-name');
 let renderedList = '';
 let mutationVersion = 0;
 const connection = document.querySelector('#connection');
@@ -107,6 +109,11 @@ function renderAppPath() {
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 
 function renderControls() {
+  // Use the configured route, not a proxy selection that is still awaiting installation.
+  const activeName = loaded ? state.activeName : null;
+  const activeLabel = loaded ? activeName || '未匹配到中转站' : '状态读取失败';
+  currentRoute.dataset.active = String(Boolean(activeName));
+  if (currentRouteName.textContent !== activeLabel) currentRouteName.textContent = activeLabel;
   installButton.disabled = busy || !loaded || state.writeBlocked || !state.selectedProxyName;
   restoreButton.disabled = busy || !loaded || state.writeBlocked || !state.proxyInstalled;
   installButton.hidden = viewMode !== 'proxy';

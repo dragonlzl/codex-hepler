@@ -50,6 +50,23 @@
 
 /* Keep the route actions together and make the ordering affordance stable. */
 .panel-hint { margin: 7px 0 0; min-height: 16px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.routes-panel-head { flex-wrap: wrap; gap: 16px; }
+.routes-heading { flex: 1; min-width: 0; }
+.routes-panel-head .count { flex-shrink: 0; }
+.current-route { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 16px; flex: 0 0 100%; min-width: 0; padding: 14px 16px; border: 1px solid #12563f; border-radius: 7px; background: #17674f; color: #fff; }
+.current-route-label { display: flex; align-items: center; gap: 8px; color: #e0f4e9; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.current-route-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: #8ff0b9; box-shadow: 0 0 0 4px #ffffff14; }
+.current-route-name { min-width: 0; font-size: 22px; font-weight: 750; line-height: 1.4; overflow-wrap: anywhere; }
+.current-route[data-active="false"] { border-color: var(--line); background: #f0f4f1; color: #536159; }
+.current-route[data-active="false"] .current-route-label { color: #536159; }
+.current-route[data-active="false"] .current-route-dot { background: #91a097; box-shadow: none; }
+.routes-panel-head .panel-hint { flex: 0 0 100%; min-width: 0; margin: 0; }
+.routes-panel-head .panel-hint:empty { display: none; }
+@media (max-width: 520px) {
+  .routes-panel-head { padding-inline: 16px; }
+  .current-route { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .current-route-name { font-size: 20px; }
+}
 .route { grid-template-columns: 18px minmax(0,.85fr) minmax(0,1fr) auto; gap: 12px; transition: background .15s, opacity .15s; }
 .route-actions { display: grid; grid-template-columns: 34px 34px auto; align-items: center; gap: 6px; }
 .route-actions .active-tag { grid-column: 1/-1; grid-row: 2; justify-self: end; }

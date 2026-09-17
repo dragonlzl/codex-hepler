@@ -55,7 +55,16 @@
           <p id="network-result" role="status" aria-live="polite"></p>
         </section>
         <section class="content-grid">
-          <section class="panel"><div class="panel-head"><div><p class="kicker">STEP 4 · AVAILABLE ROUTES</p><h3>中转站列表</h3><p id="list-feedback" class="panel-hint" role="status" aria-live="polite"></p></div><span id="count" class="count">—</span></div>
+          <section class="panel">
+            <div class="panel-head routes-panel-head">
+              <div class="routes-heading"><p class="kicker">STEP 4 · AVAILABLE ROUTES</p><h3>中转站列表</h3></div>
+              <span id="count" class="count">—</span>
+              <div id="current-route" class="current-route" role="status" aria-live="polite" aria-atomic="true" data-active="false">
+                <span class="current-route-label"><span class="current-route-dot" aria-hidden="true"></span>当前使用</span>
+                <strong id="current-route-name" class="current-route-name">正在读取…</strong>
+              </div>
+              <p id="list-feedback" class="panel-hint" role="status" aria-live="polite"></p>
+            </div>
             <div class="availability-toolbar"><label for="availability-model">可用性模型<select id="availability-model" disabled><option value="gpt-6-astra">gpt-6-astra</option><option value="gpt-5.6-sol">gpt-5.6-sol</option></select></label><span>15 秒刷新</span></div>
             <div id="route-list" class="route-list"></div>
           </section>
