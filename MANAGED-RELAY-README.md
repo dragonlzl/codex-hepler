@@ -138,6 +138,8 @@ Krill 的普通、周卡、月卡入口是特殊情况：不同域名和路径�
 
 Packycode 每个子项独立选择余额来源，绑定后也保留各自的单选项，不累加余额。API Key 方式沿用共享信息来源配置的 Key；登录方式共享绑定账号的登录授权。解绑后恢复各 Key 的独立账号授权。
 
+timiCC 的号池展示按子项独立选择并显示在各子项下方：默认「全部号池」同时显示 Team/Plus 和 Pro，也可选择「跟随 API Key」。即使多个子项共用登录，跟随模式仍使用各子项自己保存的 Key 匹配分组。选择随配置保存，重命名后保留；列表可用性筛选优先使用当前启用的 timiCC 子项，没有启用项时使用排序后的第一个子项。
+
 列表支持「全部 / 当前可用 / 当前不可用」筛选，可与名称和地址搜索叠加。以当前所选模型检测条的最后一格为准：红格属于不可用，其他颜色属于可用；没有检测记录（包括全为空格）的中转只在「全部」中出现。筛选会随 15 秒刷新和模型切换更新，不以整段可用率或站点总状态替代最后一格。
 
 中转站列表提供全局「可用性模型」选择：默认 `gpt-6-astra`，可切换为 `gpt-5.6-sol`，浏览器会记住选择。该选择只控制站点状态展示，不修改 Codex 的请求模型。
@@ -171,7 +173,14 @@ Packycode 每个子项独立选择余额来源，绑定后也保留各自的单�
 - Krill 手动授权：登录 `https://www.krill-code.com/` → Chrome / Edge 开发者工具（F12；Mac：⌥⌘I）→ **Application → Local Storage → https://www.krill-code.com** → 复制 **krill_jwt** 的完整值 → 回到工具验证保存。不复制 `krill_user`，不带键名、引号或 Bearer 前缀。登录或手动授权成功后自动关闭弹窗并弹出中央 Toast；错误保留在弹窗。
 - Krill 余额读取 `/api/credits` 的 `balance_usd`，套餐状态及当前额度读取 `/api/subscription`；套餐使用情况沿用 `/app/activity` 默认的 **最近 7 天**，只读请求 `POST /api/subscription/quota-usage`，参数为 `start_time` 和 `end_time`。显示套餐名称、状态（含冻结）、到期时间、当前额度与近 7 天用量，明确区分统计区间余量和实际套餐剩余额度。按次数和积分计费的套餐保留原单位，共享次数额度标明为账号共享；缺失值显示未知。默认读取个人账号，不带企业切换请求头，也不调用购买、冻结、重置或续费接口。
 - Krill 余额、套餐和公开可用性随列表每 15 秒刷新，多个 Krill 入口和模型切换合并账号请求；过期或取消的套餐不再显示。余额及套餐读取失败分别保留上次数据并标注，账号授权失效不影响公开监控，清除授权会同时清空套餐及用量缓存。
-- 未适配站点、缺少模型样本、状态源无法连接会分别标明。刷新失败会保留历史并标记过期；最新样本超过 3 分钟也标记过期。
+- RC / Right Code 适配 `www.rightapi.ai`、`rightapi.ai`。模型状态读取 `/models/availability?upstream_prefix=%2Fcodex&window=24h`，只展示 **Codex** 端点的 `gpt-6-astra`、`gpt-5.6-sol`；通过 `/models/public` 核对模型是否启用。24 小时为 24 个小时格，可用率取源站 `availability` 的小时均值，不混用 `user_availability` 或 `first_attempt_availability`；90% 及以上绿、60% 至 90% 黄、低于 60% 红，柱高沿用站点的对数比例。无请求时段显示灰色，均值仍沿用源站口径；全部无请求时显示未知，停用模型明确显示不可用。公开状态不携带账号令牌。
+- RC 余额读取 `https://www.rightapi.ai/dashboard` 使用的 `GET /auth/me` 中的 `balance`，直接按美元显示两位小数，不按 quota 换算。工具内通过 `POST /auth/login` 提交 `username`、`password`，保存返回的 `user_token` / `userToken`；RC 的授权是普通字符串，不强制按 JWT 解析或虚构到期时间。若返回 `otp_required`，在同一弹窗输入 6 位验证码，再向同一登录接口提交 `otp_code`；为满足该协议，账号密码仅在内存暂存至二次验证成功、取消、超时或服务关闭，最长 5 分钟，不写入磁盘。
+- RC 手动授权：登录 `https://www.rightapi.ai/dashboard` → F12（Mac：⌥⌘I）→ **Application → Local Storage → https://www.rightapi.ai** → 复制 **userToken** 完整值 → 在工具内验证保存，不使用 API Key。账号授权按子项及既有绑定关系独立保存到 `relay-ui-runtime/rightcode-<accountId>-monitor-auth.json`（权限 `0600`），令牌只发送到固定的 `/auth/me`。余额与模型状态每 15 秒刷新；失败保留最后成功数据，授权失效可重新登录，成功后自动关闭弹窗并显示居中 Toast。网络不可达时明确提示使用 VPN 或可用代理。
+- timiCC 适配 `timicc.com`、`www.timicc.com`。公开状态读取 `https://status.timicc.com/api/group/CodeX%20%E9%80%9A%E9%81%93?trendPeriod=7d`，只展示 **Codex Team/Plus号池** 和 **Codex Pro号池**。两个全局模型选项共用号池状态，页面明确标注站点当前使用的探测模型；各池独立显示最近 60 次检测、源站 7 天可用率、对话延迟及端点 PING，不将池状态当作逐模型实测结果。站点约 5 分钟检测，工具每 15 秒刷新；超过 15 分钟无新样本标为过期。维护状态单独显示，不读取官方上游健康状态替代该池检测。
+- timiCC「跟随 API Key」通过登录授权分页读取固定 `/api/v1/keys?page=N&page_size=100`，在后端使用完整 Key 精确匹配，缓存只保留 Key 的哈希与分组名。`CodeX team/plus号池` 与 `Codex Pro号池` 分别对应两个公开号池；仅规范大小写、空格和全角字符，不猜测未知分组。分组查询随检测每 15 秒刷新，同一登录合并请求；授权过期、Key 不属于当前登录账号、未知分组或查询失败均明确提示，并停止显示无法确认的号池，可随时切回「全部号池」。全展示模式无需登录或查询 Key 列表。选择保存于 `relay-ui-state.json` 的 `timiccStatusModes`，独立于余额和账号绑定。
+- timiCC 余额读取 `https://timicc.com/usage` 使用的 `GET /api/v1/auth/me` 中的 `balance`，直接显示美元，每 15 秒随检测刷新。工具内登录调用 `/api/v1/auth/login`，提交邮箱和密码，登录前需勾选站点条款；若要求二次验证，继续调用 `/api/v1/auth/login/2fa`，临时令牌只在内存保留。保存 `access_token`，不保存密码，授权按账号保存在 `relay-ui-runtime/timicc-<accountId>-monitor-auth.json`（权限 `0600`）。令牌仅发送到固定的余额和 Key 列表接口，公开监控不携带令牌。
+- timiCC 手动授权：登录 `https://timicc.com/usage` → F12（Mac：⌥⌘I）→ **Application → Local Storage → https://timicc.com** → 复制 **auth_token** 完整值 → 回到工具验证保存，不复制 API Key，不带引号或 Bearer 前缀。登录成功关闭弹窗并显示居中 Toast，失败保留在弹窗；授权失效后重新登录即可。余额请求失败保留上次成功余额与时间并标记未更新，不显示为零。
+- 未适配站点、缺少模型样本、状态源无法连接会分别标明。刷新失败会保留历史并标记过期；除上述按站点定义的采样周期外，最新样本超过 3 分钟也标记过期。
 - 页面隐藏时暂停请求，返回时立即刷新；后端按中转商合并状态请求、按 Key 账号合并余额请求，并缓存 15 秒，遵循已有的上游网络设置。
 - 新增站点时在 `managed-relay-runtime/availability.js` 的适配器表中登记精确域名、固定公开接口和解析函数，输出按官方模型 ID 归一化的样本；前端和刷新逻辑可复用。
 

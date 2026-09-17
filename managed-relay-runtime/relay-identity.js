@@ -6,6 +6,8 @@ const MERCHANT_HOSTS = {
   aixor: ['aixor.org', 'www.aixor.org', 'aixor.cc', 'www.aixor.cc'],
   packycode: ['packyapi.com', 'www.packyapi.com', 'cf.api.fan', 'slb-v1.api.fan', 'codex-api.packycode.com'],
   krill: ['krill-code.com', 'www.krill-code.com', 'api-slb.krill-code.net', 'api.cdn-krill-ai.com'],
+  rightcode: ['rightapi.ai', 'www.rightapi.ai'],
+  timicc: ['timicc.com', 'www.timicc.com'],
 };
 
 function merchantId(baseurl) {

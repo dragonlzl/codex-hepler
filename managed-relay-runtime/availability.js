@@ -1,13 +1,19 @@
 const https = require('node:https');
 const fs = require('node:fs/promises');
-const { providerId } = require('./relay-identity');
+const { providerId, accountId: naturalAccountId } = require('./relay-identity');
 const { problem } = require('./config-store');
+const { networkAccessError } = require('./network-error');
 const { readBlackaicodingStatus, MONITOR_URL, ENDPOINT: BLACKAICODING_ENDPOINT } = require('./availability-blackaicoding');
 const { readBlackaicodingBalance, ENDPOINT: BLACKAICODING_BALANCE_ENDPOINT } = require('./balance-blackaicoding');
-const { MonitorAuth, validateToken } = require('./monitor-auth');
+const { MonitorAuth, validateSiteToken } = require('./monitor-auth');
 const { MonitorLogin } = require('./monitor-login');
 const { AixorLogin } = require('./login-aixor');
 const { KrillLogin } = require('./login-krill');
+const { RightcodeLogin } = require('./login-rightcode');
+const rightcode = require('./account-rightcode');
+const rightcodeStatus = require('./availability-rightcode');
+const timiccStatus = require('./availability-timicc');
+const timiccKeys = require('./timicc-key-groups');
 const aixor = require('./account-aixor');
 const krill = require('./account-krill');
 const packy = require('./account-packycode');
@@ -21,6 +27,7 @@ const MODELS = Object.freeze(['gpt-6-astra', 'gpt-5.6-sol']);
 const REFRESH_MS = 15000;
 const HISTORY_LENGTH = 60;
 const STALE_MS = 180000;
+const TIMICC_BALANCE_ENDPOINT = 'https://timicc.com/api/v1/auth/me';
 
 function sample(value) {
   if (!value || !Number.isFinite(value.ts) || value.ts <= 0 || value.ts > 8640000000000 || typeof value.ok !== 'boolean') {
@@ -106,6 +113,24 @@ const ADAPTERS = Object.freeze([{
   usage: { endpoint: krill.USAGE_ENDPOINT, body: krill.usageBody, parse: krill.readKrillUsage, requiresAuthorization: true },
   subscriptions: { endpoint: krill.SUBSCRIPTIONS_ENDPOINT, parse: krill.readKrillSubscriptions, requiresAuthorization: true, dependencies: ['usage'] },
   verifyAuthorization: { endpoint: krill.IDENTITY_ENDPOINT, parse: krill.readKrillIdentity },
+}, {
+  id: 'rightcode', hosts: ['rightapi.ai', 'www.rightapi.ai'],
+  source: { name: 'RC', url: 'https://www.rightapi.ai/models' },
+  endpoint: rightcodeStatus.ENDPOINT,
+  dependencies: ['catalog'],
+  parse: (data, now, model, dependencies) => rightcodeStatus.readRightcodeStatus(data, MODELS, now, dependencies.catalog),
+  catalog: { endpoint: rightcodeStatus.CATALOG_ENDPOINT, parse: rightcodeStatus.codexCatalog },
+  balance: { endpoint: rightcode.BALANCE_ENDPOINT, parse: rightcode.readRightcodeBalance, requiresAuthorization: true },
+  verifyAuthorization: { endpoint: rightcode.BALANCE_ENDPOINT, parse: rightcode.readRightcodeBalance },
+}, {
+  id: 'timicc', hosts: ['timicc.com', 'www.timicc.com'],
+  source: { name: 'timiCC', url: 'https://status.timicc.com/' },
+  endpoint: timiccStatus.ENDPOINT,
+  parse: (data, now) => timiccStatus.readTimiccStatus(data, MODELS, now),
+  snapshot: timiccStatus.channelSnapshot,
+  keys: { endpoint: timiccKeys.endpoint(1), load: timiccKeys.readKeyGroups, parse: value => value, requiresAuthorization: true },
+  balance: { endpoint: TIMICC_BALANCE_ENDPOINT, parse: readBlackaicodingBalance, requiresAuthorization: true },
+  verifyAuthorization: { endpoint: TIMICC_BALANCE_ENDPOINT, parse: readBlackaicodingBalance },
 }]);
 
 function adapterFor(baseurl) {
@@ -118,12 +143,12 @@ function adapterFor(baseurl) {
 
 function requestContent(url, { outbound, signal, token, json, site = 'blackaicoding', session, captureCookies }, accept) {
   const targets = { blackaicoding: [BLACKAICODING_ENDPOINT, BLACKAICODING_BALANCE_ENDPOINT], input: [INPUT_BALANCE_ENDPOINT, INPUT_SUBSCRIPTIONS_ENDPOINT],
-    krill: [krill.IDENTITY_ENDPOINT, krill.BALANCE_ENDPOINT, krill.SUBSCRIPTIONS_ENDPOINT, krill.USAGE_ENDPOINT] };
+    krill: [krill.IDENTITY_ENDPOINT, krill.BALANCE_ENDPOINT, krill.SUBSCRIPTIONS_ENDPOINT, krill.USAGE_ENDPOINT], rightcode: [rightcode.BALANCE_ENDPOINT], timicc: [TIMICC_BALANCE_ENDPOINT] };
   const usageQuery = site === 'krill' && url === krill.USAGE_ENDPOINT && token && !session;
   const aixorTargets = [aixor.BALANCE_ENDPOINT, aixor.SUBSCRIPTIONS_ENDPOINT, aixor.PLANS_ENDPOINT];
   const sessionTargets = site === 'aixor' ? aixorTargets : site === 'packycode' ? [packy.BALANCE_ENDPOINT] : [];
   const loginTarget = Object.hasOwn(ACCOUNT_SITES, site) && (site === 'packycode' ? packy.isLoginUrl(url) : Object.values(loginEndpoints(site)).includes(url));
-  if (token && !targets[site]?.includes(url)) return Promise.reject(new Error('Monitor credential target rejected'));
+  if (token && !targets[site]?.includes(url) && !(site === 'timicc' && timiccKeys.isKeyEndpoint(url))) return Promise.reject(new Error('Monitor credential target rejected'));
   if (session && (!ACCOUNT_SITES[site]?.session || token || !(json === undefined ? sessionTargets : [loginEndpoints(site).totp]).includes(url))) return Promise.reject(new Error('Session credential target rejected'));
   if (captureCookies && (!ACCOUNT_SITES[site]?.session || !loginTarget || json === undefined)) return Promise.reject(new Error('Login cookie target rejected'));
   if (json !== undefined && !usageQuery && (token || !loginTarget)) return Promise.reject(new Error('Login credential target rejected'));
@@ -190,6 +215,7 @@ class Availability {
     this.outbound = outbound;
     this.home = options.home;
     this.getEntries = options.getEntries;
+    this.getEntry = options.getEntry;
     this.request = options.request;
     this.clock = options.clock || Date.now;
     this.timeoutMs = options.timeoutMs ?? 10000;
@@ -202,7 +228,7 @@ class Availability {
     this.packyBalance = options.getEntry ? new PackyBalance({ ...options.packyBalanceOptions, home: options.home, outbound,
       getEntry: options.getEntry, isPacky: baseurl => adapterFor(baseurl)?.id === 'packycode' }) : null;
     this.loginClients = new Map(Object.keys(ACCOUNT_SITES).map(site => [site,
-      new (ACCOUNT_SITES[site].session ? AixorLogin : site === 'krill' ? KrillLogin : MonitorLogin)((url, settings) => (this.request || requestJson)(url, { outbound: this.outbound, ...settings, site }), this.clock, site)]));
+      new (ACCOUNT_SITES[site].session ? AixorLogin : site === 'krill' ? KrillLogin : site === 'rightcode' ? RightcodeLogin : MonitorLogin)((url, settings) => (this.request || requestJson)(url, { outbound: this.outbound, ...settings, site }), this.clock, site)]));
   }
 
   accountScope(site, entry) {
@@ -212,7 +238,7 @@ class Availability {
     if (!this.auths.has(scope)) {
       // Legacy site-wide credentials have no reliable key association. Keep them untouched.
       this.auths.set(scope, new MonitorAuth(this.home, site, entry.accountId));
-      this.loginClients.set(scope, new (ACCOUNT_SITES[site].session ? AixorLogin : site === 'krill' ? KrillLogin : MonitorLogin)(
+      this.loginClients.set(scope, new (ACCOUNT_SITES[site].session ? AixorLogin : site === 'krill' ? KrillLogin : site === 'rightcode' ? RightcodeLogin : MonitorLogin)(
         (url, settings) => (this.request || requestJson)(url, { outbound: this.outbound, ...settings, site }), this.clock, site));
     }
     return scope;
@@ -268,6 +294,28 @@ class Availability {
     });
   }
 
+  changeStatusMode(operation) {
+    return this.queueAuthorization(async () => { const result = await operation(); this.authorizationVersion++; return result; });
+  }
+
+  async selectTimiccPool(status, entry, groups) {
+    if (entry.statusMode !== 'api-key') return { ...status, statusMode: 'all' };
+    const unknown = message => ({ ...status, statusMode: 'api-key', channels: [], state: 'no-data', message, modelNote: message });
+    if (groups.authRequired) return unknown('请登录 timiCC 账号，以识别该 API Key 的分组。');
+    // A stale group mapping must not silently display the old pool after a group change.
+    if (groups.error) return unknown('API Key 分组查询失败，请检查网络或授权后重试；可切换为全部号池。');
+    let key;
+    try { key = await this.getEntry(entry.name); } catch { return unknown('无法读取该子项的 API Key，请刷新列表。'); }
+    if (typeof key?.value !== 'string' || !key.value) return unknown('无法读取该子项的 API Key，请刷新列表。');
+    if (entry.naturalAccountId && naturalAccountId(key) !== entry.naturalAccountId) return unknown('API Key 已变更，请刷新列表。');
+    const group = groups.value?.[timiccKeys.keyHash(key.value)];
+    if (!group) return unknown('未在授权账号中找到该 API Key，请登录对应账号；可切换为全部号池。');
+    const groupName = group.groupName.replaceAll(key.value, '[已隐藏]');
+    if (!group.pool) return unknown('该 API Key 的分组' + (groupName ? '「' + groupName + '」' : '') + '不对应 Team/Plus 或 Pro 号池；可切换为全部号池。');
+    return { ...status, statusMode: 'api-key', keyGroup: groupName, channels: status.channels.filter(channel => channel.groupLabel === group.pool),
+      modelNote: '跟随 API Key 分组「' + groupName + '」；gpt-6-astra 与 gpt-5.6-sol 共用该号池状态。' };
+  }
+
   retainPackySources(keys) {
     this.packyBalance?.retainSources(keys.filter(entry => adapterFor(entry.baseurl)?.id === 'packycode' && entry.balanceSource !== 'account')
       .map(entry => entry.accountBindingId ? entry.accountSourceName : entry.name));
@@ -300,8 +348,11 @@ class Availability {
         if (requiresAuthorization && !credential) throw Object.assign(new Error('Account authorization required'), { status: 401 });
         const endpoint = perModel ? source.endpoint(model) : source.endpoint;
         const requestedAt = this.clock();
+        const request = this.request || source.request || requestJson;
+        const settings = { outbound: this.outbound, signal, ...(ACCOUNT_SITES[adapter.id]?.session ? { site: adapter.id } : {}),
+          ...(credential ? aixor.sessionOptions(adapter.id, credential) : {}), ...(source.body ? { json: source.body(requestedAt) } : {}) };
         const [data, dependencies] = await Promise.all([
-          (this.request || source.request || requestJson)(endpoint, { outbound: this.outbound, signal, ...(ACCOUNT_SITES[adapter.id]?.session ? { site: adapter.id } : {}), ...(credential ? aixor.sessionOptions(adapter.id, credential) : {}), ...(source.body ? { json: source.body(requestedAt) } : {}) }),
+          source.load ? source.load(request, endpoint, settings) : request(endpoint, settings),
           Promise.all((source.dependencies || []).map(async resource => {
             const entry = await this.read(adapter, model, resource, scope, statusScope);
             // Plan names are optional; quota conversion must be current and valid.
@@ -341,7 +392,8 @@ class Availability {
       const credential = adapter.requiresAuthorization ? await this.auths.get(scope).read() : null;
       if (!monitors.has(provider) || credential) monitors.set(provider, scope);
     }
-    const rows = await Promise.all(keys.map(async ({ name, baseurl, accountId, accountBindingId, accountSourceName, displayProviderId, balanceSource }) => {
+    const rows = await Promise.all(keys.map(async (routeEntry) => {
+      const { name, baseurl, accountId, accountBindingId, accountSourceName, displayProviderId, balanceSource } = routeEntry;
       const adapter = adapterFor(baseurl);
       const row = { name, baseurl, model, history: [], last: null, uptimePct: null };
       if (!adapter) return { ...row, state: 'unsupported', message: '站点未适配' };
@@ -353,9 +405,14 @@ class Availability {
       const scope = adapter.verifyAuthorization ? this.accountScope(adapter.id, { accountId }) : adapter.id;
       // Krill's different subscription endpoints share one public channel monitor.
       const provider = statusGroup({ baseurl, displayProviderId });
-      const statusScope = this.getEntries && adapter.id !== 'krill' ? adapter.id + ':provider:' + provider : adapter.id;
-      const [entry, ...accounts] = await Promise.all([this.read(adapter, model, 'status', monitors.get(provider) || scope, statusScope), ...['balance', 'subscriptions'].map(resource => !keyBalance && adapter[resource] ? this.read(adapter, model, resource, scope, statusScope) : null)]);
-      const status = entry.value?.[model];
+      const statusScope = this.getEntries && !['krill', 'timicc'].includes(adapter.id) ? adapter.id + ':provider:' + provider : adapter.id;
+      const [entry, accounts, keyGroups] = await Promise.all([
+        this.read(adapter, model, 'status', monitors.get(provider) || scope, statusScope),
+        Promise.all(['balance', 'subscriptions'].map(resource => !keyBalance && adapter[resource] ? this.read(adapter, model, resource, scope, statusScope) : null)),
+        adapter.id === 'timicc' && routeEntry.statusMode === 'api-key' ? this.read(adapter, model, 'keys', scope, statusScope) : null,
+      ]);
+      let status = entry.value?.[model];
+      if (adapter.id === 'timicc' && status) status = await this.selectTimiccPool(status, routeEntry, keyGroups);
       accounts.forEach((account, index) => {
         if (account) row[['balance', 'subscriptions'][index]] = {
           ...account.value, fetchedAt: account.fetchedAt,
@@ -364,8 +421,10 @@ class Availability {
       });
       if (row.subscriptions?.hideExpired) row.subscriptions.items = row.subscriptions.items.filter(item => item.expiresAt > this.clock());
       Object.assign(row, { source: adapter.source, fetchedAt: entry.fetchedAt, ...(adapter.verifyAuthorization && !keyBalance ? { authorizationSite: adapter.id } : {}) }, status);
+      if (adapter.snapshot && status) return { ...row, ...adapter.snapshot(status, entry, this.clock()) };
       if (entry.authRequired) return { ...row, state: 'auth-required', message: '监控需要授权或授权已过期' };
       if (entry.error) return { ...row, state: status ? 'stale' : 'error', message: status ? '刷新失败，保留上次样本' : '状态源暂时无法连接' };
+      if (status?.disabled) return { ...row, state: 'unavailable', message: '站点标记该模型不可用' };
       if (!status?.last) return { ...row, state: 'no-data', message: '状态源暂无该模型样本' };
       if (status.stale || (Number.isFinite(status.last.at) && this.clock() - status.last.at > (status.staleAfterMs ?? STALE_MS))) return { ...row, state: 'stale', message: '状态源样本已过期' };
       if (status.last.state === 'degraded') return { ...row, state: 'degraded', message: '降级' };
@@ -425,7 +484,7 @@ class Availability {
       this.invalidateAuthorization(site, scope);
       return { message: '已清除 ' + definition.name + ' 账号授权。' };
     }
-    const credential = definition.session ? aixor.validateAixorSession(token) : validateToken(token);
+    const credential = definition.session ? aixor.validateAixorSession(token) : validateSiteToken(site, token);
     const controller = new AbortController();
     const signal = AbortSignal.any([this.controller.signal, controller.signal]);
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -436,6 +495,8 @@ class Availability {
       const verified = verification.parse(data);
       if (definition.session && verified.userId !== credential.userId) throw new Error('Account identity mismatch');
     } catch (error) {
+      const networkError = networkAccessError(error, ' ' + definition.name, signal);
+      if (networkError) throw networkError;
       throw problem([401, 403].includes(error.status) ? '账号授权无效或无访问权限，请重新登录。' : '未能验证账号授权，请稍后重试。', 400);
     } finally { clearTimeout(timer); controller.abort(); }
     await auth.save(definition.session ? credential : credential.token);

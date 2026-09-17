@@ -1,5 +1,5 @@
 class RelayAvailability {
-  constructor({ list, select, getState, isDragging, onChange, mutateBalanceSource }) {
+  constructor({ list, select, getState, isDragging, onChange, mutateBalanceSource, mutateStatusMode }) {
     Object.assign(this, { list, select, getState, isDragging, onChange });
     this.model = 'gpt-6-astra';
     this.rows = new Map();
@@ -9,6 +9,7 @@ class RelayAvailability {
     this.timer = null;
     this.balancePoll = null;
     this.packy = new PackyBalanceControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateBalanceSource });
+    this.timicc = new TimiccStatusControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateStatusMode });
     const authorization = new MonitorAuthorization(async () => { this.reset(); await this.refresh(); });
     list.addEventListener('click', event => {
       const button = event.target.closest('.monitor-auth-button');
@@ -52,11 +53,15 @@ class RelayAvailability {
   }
 
   static sampleColor(sample) {
-    return ({ available: 'ok', degraded: 'warn', unavailable: 'bad', 'no-data': 'unknown' })[sample?.state]
+    return ({ available: 'ok', degraded: 'warn', unavailable: 'bad', maintenance: 'maintenance', 'no-data': 'unknown' })[sample?.state]
       || (sample?.ok === true ? 'ok' : sample?.ok === false ? 'bad' : 'unknown');
   }
 
   static filterState(status) {
+    if (Array.isArray(status?.channels)) {
+      const states = status.channels.map(channel => channel.state === 'maintenance' ? null : RelayAvailability.filterState(channel));
+      return states.includes('unavailable') ? 'unavailable' : states.length && states.every(state => state === 'available') ? 'available' : null;
+    }
     const history = status?.history;
     if (status?.state === 'unsupported' || !Array.isArray(history) || !history.length) return null;
     // Empty grid slots are not detections. Once a history exists, use its final
@@ -75,7 +80,7 @@ class RelayAvailability {
   sync() {
     const state = this.getState();
     const signature = JSON.stringify([state.home, state.accountBindingsRevision, state.availabilityAvailable, state.network?.mode, state.network?.proxyUrl,
-      state.keys.map(entry => [entry.name, entry.baseurl, entry.revision, entry.balanceSource]).sort((a, b) => a[0].localeCompare(b[0]))]);
+      state.keys.map(entry => [entry.name, entry.baseurl, entry.revision, entry.balanceSource, entry.statusMode]).sort((a, b) => a[0].localeCompare(b[0]))]);
     this.select.disabled = !state.availabilityAvailable;
     if (signature !== this.signature) {
       this.signature = signature;
@@ -121,13 +126,15 @@ class RelayAvailability {
       const entry = state.keys.find(item => item.name === name);
       return entry && this.rows.get(JSON.stringify([entry.name, entry.baseurl]));
     };
-    for (const target of this.list.querySelectorAll('.provider-availability')) {
+    for (const target of this.list.querySelectorAll('.provider-availability, .account-availability')) {
       const status = statusFor(target.dataset.name);
       const html = !state.availabilityAvailable ? '<span class="availability-empty">可用性展示需重启管理服务</span>' : this.markup(status);
       if (target.innerHTML !== html) target.innerHTML = html;
     }
     for (const account of this.list.querySelectorAll('.provider-account')) {
       const status = statusFor(account.dataset.name);
+      const modeControl = account.querySelector('.account-status-mode');
+      if (modeControl) this.timicc.paint(modeControl, account.dataset.name);
       const sourceControl = account.querySelector('.account-balance-source');
       if (sourceControl) this.packy.paintSource(sourceControl, account.dataset.name, status);
       const auth = account.querySelector('.account-auth');
@@ -155,15 +162,17 @@ class RelayAvailability {
   }
 
   markup(status) {
+    if (Array.isArray(status?.channels)) return '<div class="availability-channels"><p class="availability-model-note">' + escapeHtml(status.modelNote || '') + '</p>' +
+      status.channels.map(channel => '<section class="availability-channel" aria-label="' + escapeHtml(channel.groupLabel) + '">' + this.markup({ ...channel, source: status.source }) + '</section>').join('') + '</div>';
     if (status?.state === 'unsupported') return '<span class="availability-empty">可用性 · 站点未适配</span>';
     const stale = this.error || ['stale', 'auth-required'].includes(status?.state);
-    const message = this.error ? (status?.history.length ? '刷新失败，保留上次样本' : this.error) : status?.message || '正在读取状态';
+    const message = this.error ? (status?.history?.length ? '刷新失败，保留上次样本' : this.error) : status?.message || '正在读取状态';
     const kind = stale ? 'stale' : status?.state || 'loading';
     const capacity = Number.isInteger(status?.historyLength) && status.historyLength >= 1 && status.historyLength <= 120 ? status.historyLength : 60;
     const samples = (status?.history || []).slice(-capacity);
     const parts = Array.from({ length: capacity - samples.length }, () => '<span class="availability-sample empty" aria-hidden="true"></span>');
     for (const sample of samples) {
-      const label = ({ available: '可用', degraded: '降级', unavailable: '异常', 'no-data': '无数据' })[sample.state] || (sample.ok ? '可用' : '异常');
+      const label = sample.statusLabel || ({ available: '可用', degraded: '降级', unavailable: '异常', maintenance: '维护中', 'no-data': '无数据' })[sample.state] || (sample.ok ? '可用' : '异常');
       const detail = sample.label || new Date(sample.at).toLocaleString() + ' · ' + label +
         (sample.uptimePct == null ? '' : ' · 成功率 ' + sample.uptimePct.toFixed(2) + '%') +
         (sample.healthScore == null ? '' : ' · 整体健康度 ' + sample.healthScore.toFixed(1)) +
@@ -171,8 +180,10 @@ class RelayAvailability {
         (sample.ttftMs == null ? '' : ' · TTFT ' + sample.ttftMs + ' ms') +
         (sample.tps == null ? '' : ' · TPS ' + sample.tps.toFixed(1) + ' t/s') + (sample.error ? '\n' + sample.error : '');
       const color = RelayAvailability.sampleColor(sample);
-      const healthColor = Number.isFinite(sample.healthScore) ? ' style="background:hsl(' + (Math.max(0, Math.min(100, sample.healthScore)) * 1.2).toFixed(1) + ' 72% 42%)"' : '';
-      parts.push('<span class="availability-sample ' + color + '"' + healthColor + ' title="' + escapeHtml(detail) + '" aria-hidden="true"></span>');
+      const styles = [];
+      if (Number.isFinite(sample.healthScore)) styles.push('background:hsl(' + (Math.max(0, Math.min(100, sample.healthScore)) * 1.2).toFixed(1) + ' 72% 42%)');
+      if (Number.isFinite(sample.barHeightPct)) styles.push('height:' + Math.max(0, Math.min(100, sample.barHeightPct)).toFixed(2) + '%', 'min-height:1px', 'align-self:end');
+      parts.push('<span class="availability-sample ' + color + '"' + (styles.length ? ' style="' + styles.join(';') + '"' : '') + ' title="' + escapeHtml(detail) + '" aria-hidden="true"></span>');
     }
     const pct = status?.uptimePct;
     const summary = (status?.summaryLabel || (status?.uptimeLabel || '可用率') + ' ' + (pct == null ? '—' : pct.toFixed(2) + '%')) + ' · ' + (status?.historyLabel || '样本') + ' ' + (status?.sampleCount ?? samples.length) + '/' + capacity;
@@ -180,7 +191,7 @@ class RelayAvailability {
     const sampledAt = status?.sourceUpdatedAtLabel ? '快照时间 ' + status.sourceUpdatedAtLabel : Number.isFinite(status?.last?.at) ? (status.sampleTimeLabel || '最近采样') + ' ' + time(status.last.at) : '';
     const metrics = status?.metrics;
     const seconds = value => value == null ? '—' : (value / 1000).toFixed(2) + ' s';
-    return '<div class="availability-meta"><code>' + escapeHtml(this.model) + '</code>' +
+    return '<div class="availability-meta"><code>' + escapeHtml(status?.modelLabel || this.model) + '</code>' +
       (status?.sourceModelLabel ? '<span class="availability-source-model">' + escapeHtml(status.sourceModelLabel) + '</span>' : '') +
       (status?.groupLabel ? '<span class="availability-group">' + escapeHtml(status.groupLabel) + '</span>' : '') +
       '<span class="availability-state ' + kind + '">' + escapeHtml(message) + '</span>' +
@@ -189,8 +200,9 @@ class RelayAvailability {
       (status?.modelNote ? '<p class="availability-model-note">' + escapeHtml(status.modelNote) + '</p>' : '') +
       '<div class="availability-stats"><span>' + (stale ? '上次样本 · ' : '') + escapeHtml(summary) + '</span>' +
       (sampledAt ? '<span>' + escapeHtml(sampledAt) + '</span>' : '') + '</div>' +
-      (metrics ? '<div class="availability-metrics">' + (metrics.hideTps ? '' : '<span>' + escapeHtml(metrics.tpsLabel || 'TPS') + ' ' + (metrics.tps == null ? '—' : metrics.tps.toFixed(1) + ' t/s') + '</span>') + '<span>' + escapeHtml(metrics.ttftLabel || '首 Token') + ' ' + seconds(metrics.ttftMs) + '</span>' +
-        (metrics.hideLatency ? '' : '<span>平均延迟 ' + seconds(metrics.latencyMs) + '</span>') +
+      (metrics ? '<div class="availability-metrics">' + (metrics.hideTps ? '' : '<span>' + escapeHtml(metrics.tpsLabel || 'TPS') + ' ' + (metrics.tps == null ? '—' : metrics.tps.toFixed(1) + ' t/s') + '</span>') + (metrics.hideTtft ? '' : '<span>' + escapeHtml(metrics.ttftLabel || '首 Token') + ' ' + seconds(metrics.ttftMs) + '</span>') +
+        (metrics.hideLatency ? '' : '<span>' + escapeHtml(metrics.latencyLabel || '平均延迟') + ' ' + seconds(metrics.latencyMs) + '</span>') +
+        (Number.isFinite(metrics.pingMs) ? '<span>端点 PING ' + metrics.pingMs.toFixed(0) + ' ms</span>' : '') +
         (metrics.cacheRatePct == null ? '' : '<span>缓存率 ' + metrics.cacheRatePct.toFixed(1) + '%</span>') + '</div>' : '') +
       (samples.length ? '<div class="availability-bars' + (stale ? ' stale' : '') + '" data-columns="' + capacity + '" style="grid-template-columns:repeat(' + capacity + ',minmax(0,1fr))" role="img" aria-label="' + escapeHtml(this.model + ' · ' + (status?.sourceModelLabel || '') + ' · ' + (status?.groupLabel || '') + ' · ' + message + ' · ' + summary) + '">' + parts.join('') + '</div>' +
       '<div class="availability-axis"><span>' + (samples.length ? escapeHtml(samples[0].timeLabel || time(samples[0].at)) : '暂无采样') + '</span><span>' + (samples.length ? escapeHtml(samples.at(-1).endTimeLabel || time(samples.at(-1).at)) : '—') + '</span></div>' : '');

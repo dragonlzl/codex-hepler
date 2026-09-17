@@ -3,6 +3,7 @@ const path = require('node:path');
 const { atomicWrite, problem } = require('./config-store');
 const { accountSite } = require('./account-sites');
 const { validateAixorSession } = require('./account-aixor');
+const { validateRightcodeToken } = require('./account-rightcode');
 
 function validateToken(value, now = Date.now()) {
   if (typeof value !== 'string' || value.length > 16000) throw problem('请填写有效的账号访问令牌。', 400);
@@ -12,6 +13,10 @@ function validateToken(value, now = Date.now()) {
   try { claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')); } catch { throw problem('账号访问令牌格式无效。', 400); }
   if (!Number.isSafeInteger(claims.exp) || claims.exp * 1000 <= now) throw problem('账号访问令牌已过期，请重新登录。', 400);
   return { token, expiresAt: claims.exp * 1000 };
+}
+
+function validateSiteToken(site, value) {
+  return site === 'rightcode' ? validateRightcodeToken(value) : validateToken(value);
 }
 
 class MonitorAuth {
@@ -25,12 +30,12 @@ class MonitorAuth {
     if (!this.file) return null;
     try {
       const value = JSON.parse(await fs.readFile(this.file, 'utf8'));
-      return accountSite(this.site).session ? validateAixorSession(value) : validateToken(value.token);
+      return accountSite(this.site).session ? validateAixorSession(value) : validateSiteToken(this.site, value.token);
     } catch { return null; }
   }
   async save(value) {
     if (!this.file) throw problem('账号凭据目录未配置。', 409);
-    const credential = accountSite(this.site).session ? validateAixorSession(value) : validateToken(value);
+    const credential = accountSite(this.site).session ? validateAixorSession(value) : validateSiteToken(this.site, value);
     await fs.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
     await atomicWrite(this.file, JSON.stringify(credential) + '\n');
     return credential.expiresAt;
@@ -38,4 +43,4 @@ class MonitorAuth {
   async clear() { if (this.file) await atomicWrite(this.file, null); }
 }
 
-module.exports = { MonitorAuth, validateToken };
+module.exports = { MonitorAuth, validateToken, validateSiteToken };

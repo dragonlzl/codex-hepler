@@ -152,15 +152,22 @@ footer{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
 .availability-filters{display:inline-flex;max-width:100%;gap:4px;padding:4px;background:#eaf0ec;border:1px solid #dfe7e1;border-radius:7px}.availability-filters button{display:flex;align-items:center;gap:8px;min-height:34px;padding:7px 13px;border:1px solid transparent;border-radius:5px;background:transparent;color:#738779;font-size:12px;white-space:nowrap}.availability-filters button:hover{color:var(--green);background:#f5f9f6}.availability-filters button[aria-pressed="true"]{color:#246d4e;background:white;border-color:#d9e5dc;box-shadow:0 1px 3px #294e3510}.availability-filters span{padding:1px 5px;min-width:19px;border-radius:4px;background:#e0eae3;color:#688572;font-size:10px;text-align:center;font-variant-numeric:tabular-nums}.availability-filters button[aria-pressed="true"] span{background:#e9f4ed;color:#28724f}.filter-help{margin:10px 0 18px;color:#8a998f;font-size:10px;line-height:1.7}@media(max-width:520px){.availability-filters{display:flex;width:100%;gap:2px;padding:3px}.availability-filters button{flex:1;justify-content:center;padding-inline:5px;font-size:11px;gap:5px}.filter-help{font-size:9px}}
 
 /* Each Packycode configuration selects one balance source. */
-.packy-source{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;min-width:0;border:0;padding:0;margin:10px 0 2px;font-size:11px;color:var(--muted)}
-.packy-source legend{float:left;margin-right:14px;line-height:24px;color:#7d8f82;font-size:10px}
-.packy-source label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;min-height:24px}
-.packy-source input{accent-color:var(--green);margin:0;width:14px;height:14px}
-.packy-source label:has(input:checked){color:var(--green)}
-.packy-source:disabled{opacity:.65}
-.packy-source-error{font-size:11px;color:#986818;margin:6px 0;overflow-wrap:anywhere}
+.packy-source,.timicc-mode{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;min-width:0;border:0;padding:0;margin:10px 0 2px;font-size:11px;color:var(--muted)}
+.packy-source legend,.timicc-mode legend{float:left;margin-right:14px;line-height:24px;color:#7d8f82;font-size:10px}
+.packy-source label,.timicc-mode label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;min-height:24px}
+.packy-source input,.timicc-mode input{accent-color:var(--green);margin:0;width:14px;height:14px}
+.packy-source label:has(input:checked),.timicc-mode label:has(input:checked){color:var(--green)}
+.packy-source:disabled,.timicc-mode:disabled{opacity:.65}
+.packy-source-error,.timicc-mode-error{font-size:11px;color:#986818;margin:6px 0;overflow-wrap:anywhere}
 .packy-captcha-dialog{width:min(430px,calc(100% - 16px));padding:12px;overflow:hidden}
 .packy-captcha-dialog h2{font-size:16px;margin:6px 8px 4px}
 .packy-captcha-dialog iframe{border:0;width:100%;height:min(440px,calc(100dvh - 150px));display:block}
 .packy-captcha-dialog button{display:block;margin-left:auto;padding:8px 16px;border:1px solid var(--line);border-radius:5px;background:white;color:var(--muted)}
 .auth-toast{top:50%;left:50%;right:auto;transform:translate(-50%,-50%)}
+
+.availability-channel + .availability-channel{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.availability-channels>.availability-model-note{margin:0 0 12px}
+.availability-state.maintenance{color:#537ba4}
+.availability-sample.maintenance{background:#80a6cd}
+
+.account-availability{padding-top:12px;margin-top:10px;border-top:1px solid #edf1ee;min-width:0}

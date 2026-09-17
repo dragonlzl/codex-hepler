@@ -32,7 +32,9 @@ class PackyLoginChallenge {
         if (event.source !== frame.contentWindow || event.data?.nonce !== nonce || event.data?.type !== 'packy-captcha-result') return;
         const result = event.data;
         if (result.ok && [result.ticket, result.randstr].every(value => typeof value === 'string' && value.length > 0 && value.length <= 8192)) finish(null, { ticket: result.ticket, randstr: result.randstr });
-        else finish(new Error('人机验证未完成，请重试；也可使用下方手动会话授权。'));
+        else finish(new Error(result.reason === 'unreachable'
+          ? '无法访问人机验证服务，请开启 VPN 或配置可用代理后重试。'
+          : '人机验证未完成，请重试；也可使用下方手动会话授权。'));
       };
       const timer = setTimeout(() => finish(new Error('人机验证超时，请重新登录。')), 120000);
       this.cancel = () => finish(new Error('已取消人机验证。'));

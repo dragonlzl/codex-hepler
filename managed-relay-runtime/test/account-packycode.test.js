@@ -190,3 +190,57 @@ test('switching all consumers away from key mode aborts its pending retry', asyn
   assert.ok(signal.aborted);
   await new Promise(resolve => setImmediate(resolve)); assert.equal(calls, 1);
 });
+
+test('login bootstrap reports the failed public endpoint instead of a local file permission error', async t => {
+  const privateText = 'private-upstream-details-must-not-leak';
+  const failures = [
+    [Object.assign(new Error(privateText), { code: 'ECONNRESET' }), 502, /连接被重置，ECONNRESET/],
+    [Object.assign(new Error(privateText), { code: 'ENOTFOUND' }), 502, /域名解析失败，ENOTFOUND/],
+    [Object.assign(new Error(privateText), { code: 'ECONNREFUSED' }), 502, /连接被拒绝，ECONNREFUSED/],
+    [Object.assign(new Error(privateText), { code: 'ETIMEDOUT' }), 504, /请求超时/],
+    [Object.assign(new Error(privateText), { status: 403 }), 502, /HTTP 403/],
+    [Object.assign(new Error(privateText), { status: 429 }), 429, /请求过于频繁/],
+    [new SyntaxError(privateText), 502, /有效 JSON/],
+  ];
+  let phase = packy.SETTINGS_ENDPOINT, failure = failures[0][0];
+  const calls = [];
+  const c = await setup(t, { request: async (url, options) => {
+    calls.push(url);
+    assert.equal(options.token, undefined); assert.equal(options.session, undefined); assert.equal(options.json, undefined);
+    if (url === phase) throw failure;
+    if (url === packy.SETTINGS_ENDPOINT) return { success: true, data: { tencent_captcha_check: true, tencent_captcha_app_id: '123456' } };
+    return fixture.request(url, options);
+  } });
+  for (phase of [packy.SETTINGS_ENDPOINT, packy.CAPTCHA_ENDPOINT]) for (const [error, http, reason] of failures) {
+    failure = error; calls.length = 0;
+    const response = await c.get('/api/availability/login/options?site=packycode');
+    assert.match(response.error, reason);
+    if (['ECONNRESET', 'ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT'].includes(error.code)) assert.match(response.error, /无法访问.*请开启 VPN 或配置可用代理/);
+    else assert.ok(!response.error.includes('请开启 VPN'));
+    assert.match(response.error, phase === packy.SETTINGS_ENDPOINT ? /登录设置/ : /人机验证配置/);
+    assert.ok(!response.error.includes(privateText)); assert.ok(!response.error.includes('配置文件及权限'));
+    assert.deepEqual(calls, phase === packy.SETTINGS_ENDPOINT ? [phase] : [packy.SETTINGS_ENDPOINT, phase]);
+    await assert.rejects(packy.loginOptions(async () => { throw error; }, new AbortController().signal), e => e.status === http);
+  }
+  // Recovery must fetch new metadata, not reuse a failed or cached captcha proof.
+  phase = null;
+  const recovered = await c.get('/api/availability/login/options?site=packycode');
+  assert.equal(recovered.captcha.appId, '123456'); assert.equal(recovered.captcha.aidEncrypted, 'fixture-aid');
+  phase = packy.SETTINGS_ENDPOINT;
+  failure = Object.assign(new Error(privateText), { code: 'EACCES' });
+  const localFailure = await c.get('/api/availability/login/options?site=packycode');
+  assert.equal(localFailure.error, '本地服务操作失败，请检查配置文件及权限。');
+});
+
+test('malformed login bootstrap payloads and deadline expiry return actionable errors', async t => {
+  for (const payload of [null, {}, { success: false, message: 'private' }, { success: true, data: null }, { success: true, data: [] }]) {
+    await assert.rejects(packy.loginOptions(async () => payload, new AbortController().signal), error => error.status === 502 && /返回的登录设置无效/.test(error.message) && !error.message.includes('private'));
+  }
+  const monitor = new Availability({}, { timeoutMs: 10, request: (_url, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }) });
+  t.after(() => monitor.close());
+  // Keep a handle alive because AbortSignal.timeout does not keep the process running.
+  const timer = setTimeout(() => {}, 1000); t.after(() => clearTimeout(timer));
+  await assert.rejects(monitor.loginOptions('packycode'), error => error.status === 504 && /请求超时/.test(error.message));
+});

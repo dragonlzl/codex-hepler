@@ -17,6 +17,10 @@ function bindingModel(keys, state, context = '') {
   for (const record of records) {
     if (!record || typeof record !== 'object' || !isId(record.id) || ids.has(record.id) || natural.has(record.id) || typeof record.merchant !== 'string' ||
       !Array.isArray(record.members) || !record.members.length || !record.members.every(isId) || !record.members.includes(record.sourceId)) throw invalid();
+    // Before the RC adapter existed, its bindings used the origin as merchant ID.
+    // Preserve the existing account IDs and credentials when recognizing this site.
+    if (['https://rightapi.ai', 'https://www.rightapi.ai'].includes(record.merchant)) record.merchant = 'rightcode';
+    if (['https://timicc.com', 'https://www.timicc.com'].includes(record.merchant)) record.merchant = 'timicc';
     ids.add(record.id);
     for (const id of record.members) {
       if (byNatural.has(id) || natural.get(id)?.some(entry => merchantId(entry.baseurl) !== record.merchant)) throw invalid();

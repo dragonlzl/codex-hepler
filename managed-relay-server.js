@@ -7,6 +7,7 @@ const { createProxy } = require('./managed-relay-runtime/proxy');
 const { Outbound } = require('./managed-relay-runtime/outbound');
 const { Diagnostics } = require('./managed-relay-runtime/diagnostics');
 const { Availability } = require('./managed-relay-runtime/availability');
+const { networkAccessError } = require('./managed-relay-runtime/network-error');
 const { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
 const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
 
@@ -170,6 +171,7 @@ async function start(options = {}) {
         else if (url.pathname === '/api/packycode/balance/refresh') result = { balance: await availability.refreshPackyBalance(payload.name) };
         else if (url.pathname === '/api/packycode/balance/settings') result = await availability.packyBalance.saveSettings(payload);
         else if (url.pathname === '/api/packycode/balance/source') result = await availability.changeBalanceSource(() => store.setPackyBalanceSource(payload));
+        else if (url.pathname === '/api/timicc/status/mode') result = await availability.changeStatusMode(() => store.setTimiccStatusMode(payload));
         else if (url.pathname === '/api/network') result = await outbound.save(payload);
         else if (url.pathname === '/api/network/test') {
           const entry = await store.entry(payload.name);
@@ -201,7 +203,10 @@ async function start(options = {}) {
       const content = await fs.readFile(file).catch(() => { throw problem('Not found', 404); });
       res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
       res.end(content);
-    })().catch(error => json(res, error.status || 500, { error: error.status ? error.message : '本地服务操作失败，请检查配置文件及权限。' }));
+    })().catch(error => {
+      const failure = error.status ? error : networkAccessError(error) || error;
+      json(res, failure.status || 500, { error: failure.status ? failure.message : '本地服务操作失败，请检查配置文件及权限。' });
+    });
   });
   try {
     await listen(proxy, proxyPort);

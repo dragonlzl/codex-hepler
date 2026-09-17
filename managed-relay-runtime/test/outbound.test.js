@@ -53,7 +53,7 @@ test('auto re-reads system proxy on VPN toggle; local endpoints never enter VPN 
   let clock = 0;
   let reads = 0;
   let settings = {};
-  const o = new Outbound(await temp(t), { readSystem: async () => { reads++; return settings; }, envProxy: () => '', clock: () => clock, cacheMs: 2000 });
+  const o = new Outbound(await temp(t), { readSystem: async () => { reads++; return settings; }, readFlyingBird: async () => null, envProxy: () => '', clock: () => clock, cacheMs: 2000 });
   t.after(() => o.close());
   assert.equal((await o.resolve('https://upstream.invalid')).source, 'direct');
   settings = { HTTPSEnable: 1, HTTPSProxy: '127.0.0.1', HTTPSPort: 7892 };
@@ -106,7 +106,7 @@ test('manual settings persist separately; reject own ports; do not silently use 
 });
 
 test('environment proxy and system exclusions are respected without leaking credentials', async t => {
-  const o = new Outbound(await temp(t), { readSystem: async () => ({}), envProxy: url => url.includes('bypass.invalid') ? '' : 'http://user:password@127.0.0.1:9999' });
+  const o = new Outbound(await temp(t), { readSystem: async () => ({}), readFlyingBird: async () => null, envProxy: url => url.includes('bypass.invalid') ? '' : 'http://user:password@127.0.0.1:9999' });
   t.after(() => o.close());
   assert.equal((await o.resolve('https://upstream.invalid')).label, 'http://127.0.0.1:9999');
   assert.equal((await o.resolve('https://bypass.invalid')).label, 'DIRECT');

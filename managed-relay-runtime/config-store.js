@@ -74,6 +74,9 @@ function entryRevision(entry) { return crypto.createHash('sha256').update(JSON.s
 function packyBalanceSource(state, name) {
   return Object.hasOwn(state.packyBalanceSources || {}, name) && state.packyBalanceSources[name] === 'account' ? 'account' : 'api-key';
 }
+function timiccStatusMode(state, name) {
+  return Object.hasOwn(state.timiccStatusModes || {}, name) && state.timiccStatusModes[name] === 'api-key' ? 'api-key' : 'all';
+}
 
 function orderedKeys(keys, state) {
   const byName = new Map(keys.map(entry => [entry.name, entry]));
@@ -154,8 +157,10 @@ class ConfigStore {
       editAvailable: true,
       accountBindingAvailable: true, accountBindingsRevision: bindings.revision,
       packyBalanceSourceAvailable: true,
+      timiccStatusModeAvailable: true,
       keys: ordered.map(entry => ({ name: entry.name, baseurl: entry.baseurl, providerId: providerId(entry.baseurl), ...bindings.describe(entry),
         ...(merchantId(entry.baseurl) === 'packycode' ? { balanceSource: packyBalanceSource(current.state, entry.name) } : {}),
+        ...(merchantId(entry.baseurl) === 'timicc' ? { statusMode: timiccStatusMode(current.state, entry.name) } : {}),
         maskedValue: mask(entry.value), revision: entryRevision(entry), active: entry.name === active?.name, pinned: pinned.has(entry.name) })),
     };
   }
@@ -306,6 +311,11 @@ class ConfigStore {
         delete state.packyBalanceSources[originalName];
         if (merchantId(entry.baseurl) === 'packycode') state.packyBalanceSources = { ...state.packyBalanceSources, [entry.name]: packyBalanceSource(current.state, originalName) };
       }
+      if (Object.hasOwn(state.timiccStatusModes || {}, originalName)) {
+        state.timiccStatusModes = { ...state.timiccStatusModes };
+        delete state.timiccStatusModes[originalName];
+        if (merchantId(entry.baseurl) === 'timicc') state.timiccStatusModes = { ...state.timiccStatusModes, [entry.name]: timiccStatusMode(current.state, originalName) };
+      }
       if (current.state.accountBindings) state.accountBindings = updateBindingsForEdit(bindings, original, entry, config.keys);
       if (entry.name !== originalName) {
         if (state.activeName === originalName) state.activeName = entry.name;
@@ -323,6 +333,19 @@ class ConfigStore {
           : !current.proxyInstalled && connectionChanged ? '中转信息已保存。要应用到 Codex，请点击该中转的“切换”，再重启 Codex。'
             : '中转信息已保存。',
       };
+    });
+  }
+
+  setTimiccStatusMode(payload) {
+    return this.serialize(async () => {
+      if (!['all', 'api-key'].includes(payload?.mode)) throw problem('请选择全部号池或跟随 API Key。', 400);
+      const { config } = await this.keys(), current = await this.read();
+      const entry = config.keys.find(entry => entry.name === payload.name);
+      if (!entry || merchantId(entry.baseurl) !== 'timicc') throw problem('请选择 timiCC 子项。', 400);
+      if (payload.revision !== entryRevision(entry) || payload.previousMode !== timiccStatusMode(current.state, entry.name)) throw problem('子项配置已变化，请刷新后重试。', 409);
+      await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state,
+        timiccStatusModes: { ...current.state.timiccStatusModes, [entry.name]: payload.mode } }) }]);
+      return { message: '已保存该子项的号池展示方式。' };
     });
   }
 

@@ -26,6 +26,9 @@ const { start } = require('../../managed-relay-server');
       { name: 'Krill', value: 'sk-test-krill', baseurl: 'https://api-slb.krill-code.net/codex/v1' },
       { name: 'Krill 周卡', value: 'sk-test-krill-weekly', baseurl: 'https://api.cdn-krill-ai.com/coding/v1' },
       { name: 'Krill 月卡', value: 'sk-test-krill-monthly', baseurl: 'https://api.cdn-krill-ai.com/codex/v1' },
+      { name: 'rightcode', value: 'sk-test-rightcode', baseurl: 'https://www.rightapi.ai/v1' },
+      { name: 'RC 备用', value: 'sk-test-rightcode-backup', baseurl: 'https://www.rightapi.ai/v1' },
+      { name: 'timi', value: 'sk-test-timicc', baseurl: 'https://timicc.com' },
       { name: '其他中转', value: 'sk-test-other', baseurl }]
     : Array.from({ length: 15 }, (_, i) => ({ name: i === 0 ? '中转站甲' : i === 1 ? '备用线路✨' : `测试中转 ${i}`, value: `sk-test-${i}`, baseurl }));
   if (process.env.RELAY_GROUPING_FIXTURE) {

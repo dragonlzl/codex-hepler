@@ -7,7 +7,7 @@
     const result = value => parent.postMessage({ type: 'packy-captcha-result', nonce, ...value }, '*');
     const script = document.createElement('script');
     script.src = 'https://turing.captcha.qcloud.com/TJCaptcha.js';
-    script.onerror = () => result({ ok: false });
+    script.onerror = () => result({ ok: false, reason: 'unreachable' });
     script.onload = () => {
       try {
         document.querySelector('#status').textContent = '请按提示完成验证';

@@ -36,6 +36,8 @@ class MonitorAuthorization {
       aixor: { name: 'Aixor', origin: 'https://aixor.cc', description: '自动读取当前余额和未过期订阅。公开可用性无需登录。' },
       packycode: { name: 'Packycode', origin: 'https://www.packyapi.com', description: '自动读取控制台当前余额，每 15 秒随检测刷新。需要时会在工具内弹出人机验证。' },
       krill: { name: 'Krill', origin: 'https://www.krill-code.com', credentialName: 'krill_jwt', description: '自动读取个人账号余额、套餐状态和近 7 天用量。公开可用性无需登录。' },
+      rightcode: { name: 'RC', origin: 'https://www.rightapi.ai', credentialName: 'userToken', description: '自动读取控制台当前余额，每 15 秒随检测刷新。Codex 模型可用性无需登录。' },
+      timicc: { name: 'timiCC', origin: 'https://timicc.com', description: '自动读取当前余额，每 15 秒随检测刷新。两个 Codex 号池的公开状态无需登录。' },
     };
     if (!Object.hasOwn(sites, site)) return;
     this.hideToast();
@@ -49,7 +51,7 @@ class MonitorAuthorization {
     document.querySelector('#monitor-auth-title').textContent = settings.name + ' · ' + (name || '账号授权');
     document.querySelector('#monitor-auth-description').textContent = '使用 ' + settings.name + ' 账号登录，' + settings.description + ' 本次授权供该账号及设为同一账号的绑定配置共用，重新登录或清除授权会作用于整个共用账号。';
     const link = document.querySelector('#monitor-auth-site');
-    link.href = settings.origin + '/'; link.textContent = settings.name;
+    link.href = settings.origin + (site === 'rightcode' ? '/dashboard' : site === 'timicc' ? '/usage' : '/'); link.textContent = settings.name;
     document.querySelector('#monitor-auth-origin').textContent = settings.origin;
     this.form.elements.username.placeholder = settings.name + ' 账号或邮箱';
     const session = ['aixor', 'packycode'].includes(site);
@@ -63,9 +65,13 @@ class MonitorAuthorization {
     document.querySelector('#monitor-credential-label').textContent = session ? 'Cookie 请求头' : this.credentialName;
     this.form.elements.token.placeholder = session ? '粘贴 Cookie 的完整值' : '粘贴 ' + this.credentialName;
     this.tokenSubmit.textContent = session ? '验证并保存会话' : '验证并保存 ' + this.credentialName;
-    document.querySelector('#monitor-auth-agreement').hidden = site !== 'aixor';
-    document.querySelector('#monitor-agreement-links').innerHTML = '<a href="' + settings.origin + '/user-agreement" target="_blank" rel="noreferrer">' + settings.name + ' 用户协议</a>';
-    this.form.elements.agreement.required = site === 'aixor';
+    this.requiresAgreement = ['aixor', 'timicc'].includes(site);
+    document.querySelector('#monitor-auth-agreement').hidden = !this.requiresAgreement;
+    document.querySelector('#monitor-agreement-links').innerHTML = site === 'timicc'
+      ? [['terms', '服务条款'], ['usage-policy', '使用政策'], ['supported-regions', '支持的国家和地区'], ['service-specific-terms', '隐私政策']]
+        .map(([path, label]) => '<a href="https://timicc.com/legal/' + path + '" target="_blank" rel="noreferrer">' + label + '</a>').join('、')
+      : '<a href="' + settings.origin + '/user-agreement" target="_blank" rel="noreferrer">' + settings.name + ' 用户协议</a>';
+    this.form.elements.agreement.required = this.requiresAgreement;
     const cookieLink = document.querySelector('#monitor-cookie-site');
     cookieLink.href = settings.origin + (site === 'packycode' ? '/console' : '/wallet');
     cookieLink.textContent = settings.name + (site === 'packycode' ? ' 控制台' : ' 钱包');
@@ -167,7 +173,7 @@ class MonitorAuthorization {
     if (this.busy) return;
     const fields = this.form.elements;
     const payload = this.challengeId ? { challengeId: this.challengeId, code: fields.code.value } : { username: fields.username.value, password: fields.password.value,
-      ...(this.site === 'aixor' ? { agreement: fields.agreement.checked } : {}) };
+      ...(this.requiresAgreement ? { agreement: fields.agreement.checked } : {}) };
     fields.password.value = '';
     fields.code.value = '';
     const agreed = fields.agreement.checked;

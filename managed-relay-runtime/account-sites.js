@@ -6,6 +6,8 @@ const ACCOUNT_SITES = Object.freeze({
   aixor: Object.freeze({ name: 'Aixor', origin: 'https://aixor.cc', session: true }),
   packycode: Object.freeze({ name: 'Packycode', origin: 'https://www.packyapi.com', session: true }),
   krill: Object.freeze({ name: 'Krill', origin: 'https://www.krill-code.com' }),
+  rightcode: Object.freeze({ name: 'RC', origin: 'https://www.rightapi.ai' }),
+  timicc: Object.freeze({ name: 'timiCC', origin: 'https://timicc.com' }),
 });
 
 function accountSite(id) {
@@ -18,6 +20,7 @@ function loginEndpoints(id) {
   if (id === 'aixor') return { login: origin + '/api/user/login?turnstile=', totp: origin + '/api/user/login/2fa' };
   if (id === 'packycode') return { login: origin + '/api/user/login', totp: origin + '/api/user/login/2fa' };
   if (id === 'krill') return { login: origin + '/api/auth/login', totp: origin + '/api/auth/login/totp' };
+  if (id === 'rightcode') return { login: origin + '/auth/login' };
   return { login: origin + '/api/v1/auth/login', totp: origin + '/api/v1/auth/login/2fa' };
 }
 

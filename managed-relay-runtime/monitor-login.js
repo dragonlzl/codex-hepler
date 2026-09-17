@@ -1,11 +1,14 @@
 const { randomUUID } = require('node:crypto');
 const { problem } = require('./config-store');
 const { loginEndpoints } = require('./account-sites');
+const { networkAccessError } = require('./network-error');
 
 const { login: LOGIN_ENDPOINT, totp: TOTP_ENDPOINT } = loginEndpoints('blackaicoding');
 const CHALLENGE_MS = 5 * 60 * 1000;
 
 function loginError(error, secondStep) {
+  const networkError = networkAccessError(error);
+  if (networkError) return networkError;
   if (error.status === 429) return problem('登录尝试过于频繁，请稍后重试。', 429);
   if (error.status === 401 || error.status === 400) return problem(secondStep ? '验证码无效或已过期，请重试或重新登录。' : '账号或密码不正确，请重新输入。', 400);
   if (error.status === 403) return problem('站点拒绝登录，请检查账号状态或站点是否要求人机验证。', 400);
@@ -17,6 +20,7 @@ class MonitorLogin {
   constructor(request, clock = Date.now, site = 'blackaicoding') {
     this.request = request;
     this.clock = clock;
+    this.site = site;
     this.endpoints = loginEndpoints(site);
     this.challenges = new Map();
   }
@@ -41,6 +45,7 @@ class MonitorLogin {
       if (typeof payload.code !== 'string' || !/^\d{6}$/.test(payload.code.trim())) throw problem('请输入 6 位验证码。', 400);
       json = { temp_token: challenge.token, totp_code: payload.code.trim() };
     } else {
+      if (this.site === 'timicc' && payload.agreement !== true) throw problem('请先阅读并同意 timiCC 的服务条款及相关政策。', 400);
       if (typeof payload.username !== 'string' || !payload.username.trim() || payload.username.length > 320) throw problem('请输入账号或邮箱。', 400);
       if (typeof payload.password !== 'string' || !payload.password || payload.password.length > 4096) throw problem('请输入有效的密码。', 400);
       json = { email: payload.username.trim(), password: payload.password };

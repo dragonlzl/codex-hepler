@@ -4,6 +4,7 @@ const https = require('node:https');
 const { createHash } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 const { atomicWrite, problem } = require('./config-store');
+const { networkAccessError } = require('./network-error');
 
 const USAGE_PATH = '/api/usage/token/';
 const DEFAULTS = Object.freeze({ api_base_url: 'https://slb-v1.api.fan', request_timeout_seconds: 10, refresh_interval_seconds: 1800 });
@@ -111,6 +112,8 @@ function requestPackyUsage(endpoint, { apiKey, outbound, signal }) {
 }
 
 function safeFailure(error) {
+  const networkError = networkAccessError(error, ' Packycode 余额接口');
+  if (networkError) return networkError.message;
   if (error.status === 429) return '查询受限（HTTP 429），请稍后刷新。';
   if ([401, 403].includes(error.status)) return '余额接口拒绝访问（HTTP ' + error.status + '），请检查该 Key 或查询地址。';
   if (Number.isInteger(error.status) && error.status >= 100 && error.status <= 599) return '余额接口返回 HTTP ' + error.status + '。';
@@ -197,7 +200,7 @@ class PackyBalance {
       for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
         signal.throwIfAborted();
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(new Error('Packycode request timeout')), config.request_timeout_seconds * 1000);
+        const timer = setTimeout(() => controller.abort(Object.assign(new Error('Packycode request timeout'), { code: 'ETIMEDOUT' })), config.request_timeout_seconds * 1000);
         let failure;
         try {
           const payload = await this.request(endpoint, { apiKey, outbound: this.outbound, signal: AbortSignal.any([signal, controller.signal]) });
