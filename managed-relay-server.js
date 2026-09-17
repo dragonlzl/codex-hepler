@@ -65,7 +65,9 @@ async function start(options = {}) {
   const build = (target, injected) => {
     const store = new ConfigStore(target, 'http://127.0.0.1:' + proxyPort + '/v1');
     const outbound = injected || new Outbound(target, { localPorts: [proxyPort, uiPort] });
-    return { store, outbound, diagnostics: new Diagnostics(target), availability: new Availability(outbound, options.availabilityOptions) };
+    return { store, outbound, diagnostics: new Diagnostics(target), availability: new Availability(outbound, {
+      ...options.availabilityOptions, home: target, getEntry: name => store.entry(name), getEntries: async () => (await store.status()).keys,
+    }) };
   };
   // holder 的字段会被原地替换；下面的 facade 让代理与请求处理器始终读到当前目录的对象。
   const holder = { home: initialHome, ...build(initialHome, options.outbound) };
@@ -98,7 +100,7 @@ async function start(options = {}) {
     return { ...current, home: homeSource === 'default' ? displayPath(holder.home) : path.resolve(holder.home),
       homeSource, homeLocked, settingsPath: displayPath(settingsFile),
       configPath: displayPath(paths.configFile), codexAppPath: appPath || null, appPathSource, appPathLocked,
-      lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, network: await outbound.status(entry?.baseurl) };
+      lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, accountGroupingAvailable: true, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
   let savingPaths = false;
@@ -160,6 +162,14 @@ async function start(options = {}) {
         else if (url.pathname === '/api/keys/edit') result = await store.edit(payload.originalName, payload);
         else if (url.pathname === '/api/reorder') result = await store.reorder(payload.names);
         else if (url.pathname === '/api/pin') result = await store.pin(payload.name, payload.pinned);
+        else if (url.pathname === '/api/accounts/bind') result = await availability.changeBindings(prepare => store.bindAccounts(payload, prepare));
+        else if (url.pathname === '/api/accounts/unbind') result = await availability.changeBindings(() => store.unbindAccount(payload));
+        else if (url.pathname === '/api/availability/authorization') result = await availability.authorize(payload.site, payload.token, payload.userId, payload);
+        else if (url.pathname === '/api/availability/login') result = await availability.login(payload);
+        else if (url.pathname === '/api/availability/login/cancel') result = await availability.cancelLogin(payload.site, payload.challengeId, payload);
+        else if (url.pathname === '/api/packycode/balance/refresh') result = { balance: await availability.refreshPackyBalance(payload.name) };
+        else if (url.pathname === '/api/packycode/balance/settings') result = await availability.packyBalance.saveSettings(payload);
+        else if (url.pathname === '/api/packycode/balance/source') result = await availability.changeBalanceSource(() => store.setPackyBalanceSource(payload));
         else if (url.pathname === '/api/network') result = await outbound.save(payload);
         else if (url.pathname === '/api/network/test') {
           const entry = await store.entry(payload.name);
@@ -175,6 +185,8 @@ async function start(options = {}) {
       }
       if (req.method !== 'GET') throw problem('方法不允许。', 405);
       if (url.pathname === '/api/status') { json(res, 200, await status()); return; }
+      if (url.pathname === '/api/packycode/balance/settings') { json(res, 200, { settings: await availability.packyBalance.settings() }); return; }
+      if (url.pathname === '/api/availability/login/options') { json(res, 200, await availability.loginOptions(url.searchParams.get('site'))); return; }
       if (url.pathname === '/api/availability') {
         const current = holder;
         const monitor = current.availability;

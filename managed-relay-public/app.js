@@ -7,12 +7,23 @@ const list = document.querySelector('#route-list');
 const routesPanel = document.querySelector('#routes-panel');
 const listFeedback = document.querySelector('#list-feedback');
 const currentRoute = document.querySelector('#current-route');
-const currentRouteCard = document.querySelector('#current-route-card');
-const currentRouteMessage = document.querySelector('#current-route-message');
-let renderedCurrentRoute = '';
+const currentRouteName = document.querySelector('#current-route-name');
+const addDialog = document.querySelector('#add-dialog');
+const addForm = document.querySelector('#add-form');
+let search = '';
+let statusFilter = 'all';
+let draggedProvider = false;
+let expanded = {};
+try { expanded = JSON.parse(localStorage.getItem('relay-expanded-providers') || '{}') || {}; } catch {}
+if (typeof expanded !== 'object' || Array.isArray(expanded)) expanded = {};
+function expansionKey(id) { return JSON.stringify([state.home || '', id]); }
+function saveExpansion(id, open) {
+  expanded[expansionKey(id)] = open;
+  try { localStorage.setItem('relay-expanded-providers', JSON.stringify(expanded)); } catch {}
+}
 let renderedList = '';
 let mutationVersion = 0;
-const connection = document.querySelector('#connection');
+const connection = document.querySelector('#service-connection');
 const notice = document.querySelector('#notice');
 const formMessage = document.querySelector('#form-message');
 const installButton = document.querySelector('#install-button');
@@ -35,8 +46,28 @@ const appPathForm = document.querySelector('#app-path-form');
 const appPathResult = document.querySelector('#app-path-result');
 let appPathDirty = false;
 const availability = new RelayAvailability({
-  list: routesPanel, select: document.querySelector('#availability-model'), getState: () => state, isDragging: () => Boolean(draggedName),
+  list: routesPanel, select: document.querySelector('#availability-model'), getState: () => state, isDragging: () => Boolean(draggedName), onChange: applyAvailabilityFilter,
+  mutateBalanceSource: async payload => {
+    if (busy || networkBusy || draggedName) throw new Error('请等待当前操作完成。');
+    busy = true; mutationVersion++; renderControls();
+    try {
+      const data = await api('/api/packycode/balance/source', payload);
+      Object.assign(state, data.status); loaded = true; render();
+    } finally { busy = false; renderControls(); }
+  },
 });
+
+new AccountBindings({ list: routesPanel, getState: () => state, mutate: async (endpoint, payload) => {
+  if (busy || networkBusy || draggedName) throw new Error('请等待当前操作完成。');
+  busy = true; mutationVersion++; renderControls();
+  try {
+    const data = await api(endpoint, payload);
+    Object.assign(state, data.status); loaded = true;
+    const target = state.keys.find(entry => entry.name === (payload.targetName || payload.name));
+    if (target) saveExpansion(RelayGroups.provider(target), true);
+    render(); showMessage(data.message, true);
+  } finally { busy = false; renderControls(); }
+} });
 
 function sourceLabel(source) {
   return ({
@@ -111,33 +142,60 @@ function renderAppPath() {
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 
-function routeMarkup(entry, featured = false) {
+function routeMarkup(entry, accountLabel = '', address = '', keyHint = '') {
   const chosen = viewMode === 'proxy' && entry.name === state.selectedProxyName;
-  const tag = featured ? '' : entry.active ? '配置选中' : chosen ? '待接入' : '';
-  return '<article class="route' + (entry.pinned ? ' is-pinned' : '') + '" data-pinned="' + Boolean(entry.pinned) + '" data-name="' + escapeHtml(entry.name) + '"><div class="drag-handle" title="拖动排序" aria-label="拖动排序">⋮⋮</div><div class="route-name"><small>名称</small>' + escapeHtml(entry.name) +
-    '</div><div class="route-field"><small>API KEY · BASE URL</small><code>' + escapeHtml(entry.maskedValue) +
-    '</code><code class="url">' + escapeHtml(entry.baseurl) + '</code></div><div class="route-actions">' +
-    (tag ? '<span class="active-tag">' + tag + '</span>' : '') +
+  const tag = entry.name === state.activeName ? '当前使用' : chosen ? '待接入' : '';
+  return '<article class="route' + (entry.pinned ? ' is-pinned' : '') + (entry.name === state.activeName ? ' is-active' : '') + '" data-pinned="' + Boolean(entry.pinned) + '" data-name="' + escapeHtml(entry.name) + '"><button type="button" class="drag-handle" title="拖动排序；也可用 Alt + 上下方向键调整" aria-label="调整 ' + escapeHtml(entry.name) + ' 的顺序">⠿</button><div class="route-name" title="' + escapeHtml(entry.name) + '">' + escapeHtml(RelayGroups.routeLabel(entry)) +
+    (accountLabel ? '<span class="route-account-label">' + escapeHtml(accountLabel) + '</span>' : '') +
+    (address ? '<code class="route-endpoint">' + escapeHtml(address) + '</code>' : '') +
+    (keyHint ? '<code class="route-key">API Key · ' + escapeHtml(keyHint) + '</code>' : '') + '</div>' +
+    (tag ? '<span class="active-tag">' + tag + '</span>' : '<span></span>') + '<div class="route-actions">' +
     '<button type="button" class="pin-button' + (entry.pinned ? ' pinned' : '') + '" data-name="' + escapeHtml(entry.name) + '" data-pinned="' + Boolean(entry.pinned) + '" aria-pressed="' + Boolean(entry.pinned) + '" title="' + (entry.pinned ? '取消置顶' : '置顶') + '" aria-label="' + (entry.pinned ? '取消置顶' : '置顶') + '"><span class="pin-icon" aria-hidden="true"></span></button>' +
     '<button type="button" class="edit-button" data-name="' + escapeHtml(entry.name) + '" title="编辑" aria-label="编辑"><span class="edit-icon" aria-hidden="true"></span></button>' +
-    (featured ? '' : '<button class="select-button" data-name="' + escapeHtml(entry.name) + '">切换</button>') + '</div><div class="route-availability"></div></article>';
+    '<button class="select-button" data-name="' + escapeHtml(entry.name) + '">' + (tag === '当前使用' ? '已选中' : tag === '待接入' ? '已选择' : '切换') + '</button></div></article>';
+}
+
+function groupMarkup(group, index) {
+  const open = Boolean(search || expanded[expansionKey(group.id)]);
+  const visible = open ? group.entries : group.entries.slice(0, 1);
+  const accounts = [...group.accounts.values()];
+  const active = group.entries.find(entry => entry.name === state.activeName);
+  const id = 'provider-entries-' + index;
+  const host = RelayGroups.providerLabel(group.id);
+  const krill = group.id === 'krill';
+  const endpoints = [...new Set(group.entries.map(RelayGroups.endpoint))];
+  const accountLabel = items => {
+    if (items[0].accountBindingId && items[0].boundAccountCount > 1) return '共用账号';
+    if (!krill) return accounts.length > 1 ? '账号 ' + (accounts.findIndex(account => account[0].accountId === items[0].accountId) + 1) : '中转账号';
+    const address = RelayGroups.endpoint(items[0]);
+    const peers = accounts.filter(account => RelayGroups.endpoint(account[0]) === address);
+    return '线路 ' + (endpoints.indexOf(address) + 1) + (peers.length > 1 ? ' · 账号 ' + (peers.indexOf(items) + 1) : '');
+  };
+  // Packycode has a per-configuration source, even when several configurations share a login.
+  const displayAccounts = accounts.flatMap(items => items[0].merchantId === 'packycode' ? items.map(entry => [entry]) : [items]);
+  const accountRows = displayAccounts.filter(items => items.some(entry => visible.includes(entry))).map(items => {
+    const entry = items[0];
+    const shared = entry.accountBindingId && entry.boundAccountCount > 1;
+    const routes = items.filter(item => visible.includes(item)).map(item => routeMarkup(item,
+      krill ? '线路 ' + (endpoints.indexOf(RelayGroups.endpoint(item)) + 1) : accounts.length > 1 ? accountLabel(items) : '',
+      krill || endpoints.length > 1 ? RelayGroups.endpoint(item) : '', shared ? item.maskedValue : '')).join('');
+    const canBind = entry.accountBindingId || state.keys.some(other => other.merchantId === entry.merchantId && other.accountId !== entry.accountId);
+    const bindings = canBind ? '<button class="account-bind-button" type="button"' + (!state.accountBindingAvailable ? ' disabled title="重启管理服务后可设置账号绑定"' : '') + '>' + (entry.accountBindingId ? '管理绑定' : '设为同一账号') + '</button>' : '';
+    return '<section class="provider-account" data-name="' + escapeHtml(entry.name) + '" data-account-id="' + escapeHtml(entry.accountId || '') + '"><div class="account-routes">' + routes + '</div><div class="account-summary"><div class="account-heading"><strong>' + escapeHtml(accountLabel(items)) + '</strong>' +
+      (shared ? '<span class="binding-tag">' + entry.boundAccountCount + ' 个账号已绑定</span>' : '<code>' + escapeHtml(entry.maskedValue) + '</code>') +
+      (items.length > 1 ? '<span>' + items.length + ' 个配置共用</span>' : '') + '<span class="account-tools">' + bindings + '<span class="account-auth"></span></span></div>' +
+      (entry.accountBindingId ? '<p class="account-source">共享信息来源：' + escapeHtml(entry.accountSourceName) + '</p>' : '') +
+      (entry.merchantId === 'packycode' ? '<div class="account-balance-source"></div>' : '') + '<div class="account-data"></div></div></section>';
+  }).join('');
+  return '<section class="provider-card' + (active ? ' has-active' : '') + '" data-provider="' + escapeHtml(group.id) + '" data-name="' + escapeHtml(group.entries[0].name) + '"><header class="provider-heading"><button type="button" class="drag-handle provider-drag" title="拖动中转商排序；Alt + 上下方向键调整" aria-label="调整中转商 ' + escapeHtml(host) + ' 的顺序">⠿</button><span class="provider-avatar" aria-hidden="true">' + escapeHtml(host[0].toUpperCase()) + '</span><div class="provider-identity"><h3>' + escapeHtml(host) + '</h3><code>' + escapeHtml(krill ? endpoints.length + ' 条线路 · 按 Base URL 区分' : group.id.startsWith('merchant:') ? endpoints.length + ' 个接口地址' : group.id) + '</code></div><div class="provider-labels">' + (group.entries.some(entry => entry.pinned) ? '<span class="provider-pin">已置顶</span>' : '') + (active ? '<span class="active-tag">使用中' + (!visible.includes(active) ? ' · ' + escapeHtml(active.name) : '') + '</span>' : '') + '<span>' + group.entries.length + ' 个配置</span></div>' + (group.entries.length > 1 ? '<button type="button" class="group-toggle" data-provider="' + escapeHtml(group.id) + '" aria-expanded="' + open + '" aria-controls="' + id + '">' + (open ? '收起' : '展开全部') + '<span aria-hidden="true">' + (open ? '⌃' : '⌄') + '</span></button>' : '') + '</header><div class="provider-availability" data-name="' + escapeHtml(group.entries[0].name) + '"></div><div id="' + id + '" class="provider-accounts">' + accountRows + '</div></section>';
 }
 
 function renderCurrentRoute() {
-  // A pending proxy selection must not replace the configured route.
   const entry = loaded ? state.keys.find(item => item.name === state.activeName) : null;
   currentRoute.dataset.active = String(Boolean(entry));
-  currentRouteCard.hidden = !entry;
-  currentRouteMessage.hidden = Boolean(entry);
-  if (!entry) {
-    const message = loaded ? '未匹配到中转站' : '状态读取失败';
-    if (currentRouteMessage.textContent !== message) currentRouteMessage.textContent = message;
-  }
-  const markup = entry ? routeMarkup(entry, true) : '';
-  if (markup !== renderedCurrentRoute && !draggedName) {
-    currentRouteCard.innerHTML = markup;
-    renderedCurrentRoute = markup;
-  }
+  currentRouteName.disabled = !entry;
+  currentRouteName.textContent = entry?.name || (loaded ? '尚未选择中转' : '正在读取…');
+  document.querySelector('#current-route-mode').textContent = state.proxyInstalled ? '本地代理 · 即时切换' : '直接配置 · 换站需重启 Codex';
 }
 
 function renderControls() {
@@ -160,14 +218,16 @@ function renderControls() {
   });
   const listDisabled = busy || networkBusy || !loaded || state.writeBlocked || !state.listActionsAvailable;
   document.querySelectorAll('.pin-button').forEach(button => { button.disabled = listDisabled; });
+  document.querySelectorAll('.account-bind-button').forEach(button => { button.disabled = listDisabled || !state.accountBindingAvailable; });
   document.querySelectorAll('.edit-button').forEach(button => {
     button.disabled = busy || networkBusy || !loaded || state.writeBlocked || !state.editAvailable;
     button.title = state.editAvailable ? '编辑' : '编辑功能需重启中转服务后生效';
   });
-  document.querySelectorAll('.drag-handle').forEach(handle => { handle.draggable = !listDisabled; });
+  document.querySelectorAll('.drag-handle').forEach(handle => { handle.draggable = !listDisabled && !search; handle.disabled = listDisabled || Boolean(search); });
   list.setAttribute('aria-busy', String(busy));
   if (loaded && !state.listActionsAvailable) listFeedback.textContent = '排序与置顶需重启中转服务后生效。';
-  document.querySelector('#add-form button').disabled = busy || !loaded || state.writeBlocked;
+  document.querySelector('#add-open').disabled = busy || !loaded || state.writeBlocked;
+  for (const control of addForm.elements) control.disabled = busy || !loaded || state.writeBlocked;
   renderNetwork();
   renderHome();
   renderAppPath();
@@ -186,8 +246,44 @@ function showMessage(text, success = false) {
   notice.scrollIntoView({ block: 'nearest', behavior: 'instant' });
 }
 
+function applyAvailabilityFilter() {
+  if (draggedName) return;
+  const counts = { all: 0, available: 0, unavailable: 0 };
+  let visible = 0, configurations = 0;
+  const groups = new Map(RelayGroups.group(state.keys).map(group => [group.id, group]));
+  for (const card of list.querySelectorAll('.provider-card')) {
+    const group = groups.get(card.dataset.provider);
+    const category = availability.filterFor(group?.entries[0]);
+    counts.all++;
+    if (category) counts[category]++;
+    card.hidden = statusFilter !== 'all' && category !== statusFilter;
+    if (!card.hidden) { visible++; configurations += group?.entries.length || 0; }
+  }
+  document.querySelectorAll('[data-status-filter]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.statusFilter === statusFilter));
+  });
+  document.querySelectorAll('[data-filter-count]').forEach(badge => { badge.textContent = counts[badge.dataset.filterCount]; });
+  document.querySelector('#count').textContent = visible + ' 个中转商 / ' + configurations + ' 个配置';
+  const empty = document.querySelector('#route-empty');
+  empty.hidden = visible > 0;
+  let title, detail;
+  if (!state.keys.length) {
+    title = loaded ? '还没有中转配置' : '正在读取中转配置…';
+    detail = loaded ? '点击右上角「新增中转」，添加第一个请求入口。' : '请稍候。';
+  } else if (!counts.all) {
+    title = '没有匹配的中转'; detail = '试试其他名称或地址。';
+  } else {
+    title = statusFilter === 'available' ? '没有当前可用的中转' : '没有当前不可用的中转';
+    detail = availability.request ? '正在读取所选模型的检测状态…' : '无检测记录的中转只在「全部」中显示，可切换筛选或模型查看。';
+  }
+  const heading = empty.querySelector('strong'), description = empty.querySelector('p');
+  if (heading.textContent !== title) heading.textContent = title;
+  if (description.textContent !== detail) description.textContent = detail;
+}
+
 function render() {
-  document.querySelector('#count').textContent = state.keys.length;
+  const groups = RelayGroups.group(state.keys);
+  document.querySelector('#nav-count').textContent = groups.length;
   document.querySelector('#proxy-url').textContent = state.proxyUrl || '—';
   document.querySelector('#mode-description').textContent = state.proxyInstalled
     ? '当前配置：本地代理。接入与恢复直连后需重启一次 Codex。'
@@ -205,7 +301,8 @@ function render() {
     button.classList.toggle('active', button.dataset.mode === viewMode);
     button.setAttribute('aria-pressed', String(button.dataset.mode === viewMode));
   });
-  const markup = state.keys.map(entry => routeMarkup(entry)).join('');
+  const matches = groups.filter(group => group.entries.some(entry => (entry.name + ' ' + entry.baseurl).toLowerCase().includes(search)));
+  const markup = matches.map(groupMarkup).join('');
   // Keep DOM nodes stable during polling, so drag and keyboard focus survive.
   if (markup !== renderedList && !draggedName) { list.innerHTML = markup; renderedList = markup; }
   renderControls();
@@ -287,7 +384,14 @@ document.querySelectorAll('.mode-button').forEach(button => button.addEventListe
   }
 }));
 routesPanel.addEventListener('click', async event => {
-  const focusRoot = currentRoute.contains(event.target) ? currentRoute : list;
+  const focusRoot = list;
+  const toggle = event.target.closest('.group-toggle');
+  if (toggle) {
+    saveExpansion(toggle.dataset.provider, toggle.getAttribute('aria-expanded') !== 'true');
+    search = ''; document.querySelector('#route-search').value = ''; render();
+    [...list.querySelectorAll('.group-toggle')].find(button => button.dataset.provider === toggle.dataset.provider)?.focus({ preventScroll: true });
+    return;
+  }
   const edit = event.target.closest('.edit-button');
   if (edit) {
     if (edit.disabled || busy || networkBusy || draggedName) return;
@@ -350,52 +454,97 @@ editForm.addEventListener('submit', async event => {
     renderControls();
   }
 });
+function dragTarget(event) { return event.target.closest(draggedProvider ? '.provider-card' : '.route') || (!draggedProvider && event.target.closest('.provider-account')) || event.target.closest('.provider-card'); }
+function clearDrag() {
+  draggedName = null; draggedProvider = false;
+  list.querySelectorAll('.dragging,.drop-target').forEach(row => row.classList.remove('dragging', 'drop-target'));
+}
 routesPanel.addEventListener('dragstart', event => {
-  const row = event.target.closest('.route');
-  if (!row || busy || networkBusy || !loaded || state.writeBlocked || !state.listActionsAvailable) { event.preventDefault(); return; }
+  const handle = event.target.closest('.drag-handle');
+  const row = handle?.closest('.route') || handle?.closest('.provider-card');
+  if (!row || handle.disabled || busy || networkBusy) { event.preventDefault(); return; }
+  draggedProvider = handle.classList.contains('provider-drag');
   draggedName = row.dataset.name;
   row.classList.add('dragging');
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', draggedName);
 });
 list.addEventListener('dragover', event => {
-  const row = event.target.closest('.route');
-  document.querySelectorAll('.route.drop-target').forEach(item => item.classList.remove('drop-target'));
-  if (!row || !draggedName || row.dataset.name === draggedName) return;
-  const source = state.keys.find(entry => entry.name === draggedName);
-  if (row.dataset.pinned !== String(Boolean(source?.pinned))) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = 'move';
-  row.classList.add('drop-target');
+  list.querySelectorAll('.drop-target').forEach(item => item.classList.remove('drop-target'));
+  const row = dragTarget(event);
+  if (!row || !draggedName || !RelayGroups.reorder(state.keys, draggedName, row.dataset.name, draggedProvider)) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = 'move'; row.classList.add('drop-target');
 });
 list.addEventListener('drop', async event => {
   event.preventDefault();
-  const target = event.target.closest('.route');
-  if (!target || !draggedName || target.dataset.name === draggedName || busy) return;
-  const source = state.keys.find(entry => entry.name === draggedName);
-  if (target.dataset.pinned !== String(Boolean(source?.pinned))) return;
-  const names = state.keys.map(entry => entry.name);
-  const from = names.indexOf(draggedName);
-  const to = names.indexOf(target.dataset.name);
-  if (from < 0 || to < 0) return;
-  names.splice(from, 1);
-  names.splice(to, 0, draggedName);
-  draggedName = null;
-  document.querySelectorAll('.route.dragging,.route.drop-target').forEach(row => row.classList.remove('dragging', 'drop-target'));
-  await perform('/api/reorder', { names });
+  const row = dragTarget(event);
+  const names = row && draggedName && RelayGroups.reorder(state.keys, draggedName, row.dataset.name, draggedProvider);
+  clearDrag();
+  if (names && !busy) await perform('/api/reorder', { names });
 });
-routesPanel.addEventListener('dragend', () => {
-  draggedName = null;
-  document.querySelectorAll('.route.dragging,.route.drop-target').forEach(row => row.classList.remove('dragging', 'drop-target'));
+routesPanel.addEventListener('dragend', () => { clearDrag(); availability.paint(); });
+list.addEventListener('keydown', async event => {
+  const handle = event.target.closest('.drag-handle');
+  if (!handle || handle.disabled || !event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+  event.preventDefault();
+  const provider = handle.classList.contains('provider-drag');
+  const row = handle.closest(provider ? '.provider-card' : '.route');
+  const rows = [...list.querySelectorAll(provider ? '.provider-card' : '.route')].filter(row => !row.closest('.provider-card').hidden);
+  const target = rows[rows.indexOf(row) + (event.key === 'ArrowUp' ? -1 : 1)];
+  const names = target && RelayGroups.reorder(state.keys, row.dataset.name, target.dataset.name, provider);
+  if (names) {
+    await perform('/api/reorder', { names });
+    [...list.querySelectorAll(provider ? '.provider-card' : '.route')].find(item => item.dataset.name === row.dataset.name)?.querySelector('.drag-handle').focus({ preventScroll: true });
+  }
 });
 installButton.addEventListener('click', () => perform('/api/proxy/install', { name: state.selectedProxyName }, true));
 restoreButton.addEventListener('click', () => perform('/api/proxy/restore', {}, true));
 document.querySelector('#refresh-status').addEventListener('click', load);
-document.querySelector('#add-form').addEventListener('submit', async event => {
+document.querySelector('#add-open').addEventListener('click', () => { addForm.reset(); formMessage.textContent = ''; addDialog.showModal(); });
+document.querySelector('#add-cancel').addEventListener('click', () => { if (!busy) addDialog.close(); });
+addDialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+addDialog.addEventListener('close', () => { addForm.reset(); document.querySelector('#add-open').focus(); });
+addForm.addEventListener('submit', async event => {
   event.preventDefault();
-  formMessage.textContent = '';
-  if (await perform('/api/keys', Object.fromEntries(new FormData(event.target).entries()))) event.target.reset();
+  if (busy) return;
+  const payload = Object.fromEntries(new FormData(addForm));
+  busy = true; mutationVersion++; renderControls(); formMessage.textContent = '正在保存…';
+  try {
+    const data = await api('/api/keys', payload);
+    Object.assign(state, data.status); loaded = true; render(); addDialog.close();
+    showMessage(data.message, true);
+  } catch (error) { formMessage.textContent = errorMessage(error); }
+  finally { busy = false; renderControls(); }
 });
+document.querySelectorAll('[data-status-filter]').forEach(button => button.addEventListener('click', () => {
+  statusFilter = button.dataset.statusFilter; applyAvailabilityFilter();
+}));
+document.querySelector('#route-search').addEventListener('input', event => { search = event.target.value.trim().toLowerCase(); render(); });
+currentRouteName.addEventListener('click', () => {
+  const entry = state.keys.find(item => item.name === state.activeName);
+  if (!entry) return;
+  search = ''; statusFilter = 'all'; document.querySelector('#route-search').value = '';
+  saveExpansion(RelayGroups.provider(entry), true); render();
+  const row = [...list.querySelectorAll('.route')].find(row => row.dataset.name === entry.name);
+  row?.scrollIntoView({ block: 'center', behavior: 'smooth' }); row?.querySelector('.edit-button').focus({ preventScroll: true });
+});
+let currentPage = null;
+const pageScroll = new Map();
+function navigate() {
+  const names = { routes: '中转站', connection: '运行与连接', settings: '必要设置' };
+  const page = Object.hasOwn(names, location.hash.slice(1)) ? location.hash.slice(1) : 'routes';
+  const content = document.querySelector('main');
+  if (currentPage && currentPage !== page) pageScroll.set(currentPage, content.scrollTop);
+  document.querySelectorAll('.page').forEach(panel => { panel.hidden = panel.id !== 'page-' + page; });
+  document.querySelectorAll('nav [data-page]').forEach(link => {
+    if (link.dataset.page === page) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
+  });
+  document.querySelector('#page-breadcrumb').textContent = names[page];
+  if (currentPage !== page) content.scrollTop = pageScroll.get(page) || 0;
+  currentPage = page;
+}
+window.addEventListener('hashchange', navigate);
+navigate();
 networkForm.addEventListener('input', () => { networkDirty = true; renderNetwork(); });
 networkForm.addEventListener('submit', async event => {
   event.preventDefault();
@@ -444,7 +593,7 @@ homeForm.addEventListener('submit', async event => {
     // 目录变了：运行方式、列表、出站设置和反馈都要按新目录重算。
     homeDirty = false;
     networkDirty = false;
-    viewMode = null;
+    viewMode = state.mode;
     draggedName = null;
     renderedList = '';
     feedback = { phase: 'idle', message: '' };

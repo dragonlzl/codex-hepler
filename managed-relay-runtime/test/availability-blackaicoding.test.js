@@ -1,103 +1,185 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { readBlackaicodingStatus } = require('../availability-blackaicoding');
-const { Availability, MODELS, REFRESH_MS, adapterFor } = require('../availability');
-
-const NOW = Date.parse('2026-09-16T00:00:27Z');
-const keys = [
-  { name: 'code for me', baseurl: 'https://blackaicoding.com', value: 'sk-private' },
-  { name: 'renamed relay', baseurl: 'https://www.blackaicoding.com/v1', value: 'sk-private-2' },
-  { name: 'INPUT', baseurl: 'https://ai.input.im' },
-];
-
-function fixture({ warning = false, updated = '2026-09-16 00:00:27', states = ['good', 'unknown', 'bad', 'watch'] } = {}) {
-  const row = (model, rate, ticks) => `<tr><td><span class="model-name">${model}</span></td>
-    <td><div class="timeline">${ticks.map(kind => `<span title="${kind} &amp; &lt;sample&gt;" class="tick ${kind}"></span>`).join('')}</div></td>
-    <td class="num">${rate}</td><td class="num">1200ms</td></tr>`;
-  return `<html><div class="meta"><div>更新时间：${updated}</div></div>
-    ${warning ? '<div class="warn">数据刷新暂时延迟</div>' : ''}
-    <table><thead><tr><th>组件</th><th>最近 30 分钟</th><th>1 小时可用率</th><th>平均首字</th></tr></thead><tbody>
-      ${row('gpt-6-astra', '83.69%', states)}${row('gpt-5.6-sol', '84.22%', ['good'])}
-      ${row('gpt-6-astra-alias', '100.00%', ['good'])}</tbody></table></html>`;
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+const https = require('node:https');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
+const { readBlackaicodingStatus, ENDPOINT, MONITOR_URL } = require('../availability-blackaicoding');
+const { MonitorAuth, validateToken } = require('../monitor-auth');
+const { ENDPOINT: BALANCE_ENDPOINT } = require('../balance-blackaicoding');
+const { Availability, MODELS, REFRESH_MS, adapterFor, requestJson } = require('../availability');
+const { start } = require('../../managed-relay-server');
+const NOW = Date.parse('2026-09-17T02:35:30Z');
+const START = Date.parse('2026-09-17T01:10:00Z');
+const keys = [{ name: 'code for me', baseurl: 'https://blackaicoding.com', value: 'sk-not-monitor-token' },
+  { name: 'backup', baseurl: 'https://www.blackaicoding.com/v1', value: 'sk-not-monitor-token-2' },
+  { name: 'input', baseurl: 'https://ai.input.im' }];
+const jwt = exp => 'test.' + Buffer.from(JSON.stringify({ exp })).toString('base64url') + '.signature';
+const TOKEN = jwt(Math.floor(Date.now() / 1000) + 86400);
+function fixture() {
+  const metrics = error_rate => ({ error_rate, success_rate: .01, cache_rate: .8, request_count: 0,
+    ttft: { avg_ms: 30000 }, duration: { avg_ms: 60000 } });
+  const row = (model, errorRate, group = 2, platform = 'openai') => ({ platform, group_id: group,
+    group_name: group === 2 ? 'codex混合渠道--低价' : '纯pro渠道', model,
+    metrics: metrics(errorRate), health: { overall: 'critical', score: 20 }, buckets: [
+      { bucket_start: new Date(START).toISOString(), metrics: metrics(.1), health: { overall: 'healthy', score: 90 } },
+      { bucket_start: new Date(START + 300000).toISOString(), metrics: metrics(.2), health: { overall: 'warning', score: 60 } },
+      { bucket_start: new Date(START + 16 * 300000).toISOString(), metrics: metrics(errorRate), health: { overall: 'critical', score: 20 } },
+    ] });
+  return { code: 0, data: { group_by: 'platform_group_model', coverage: {
+    requested_start: new Date(START).toISOString(), requested_end: new Date(START + 5400000).toISOString(),
+    data_through: new Date(START + 17 * 300000).toISOString(), bucket_seconds: 300,
+  }, items: [row('__other__', .4), row('gpt-5.6-sol', .3), row('gpt-6-astra', 0, 7), row('gpt-6-astra', 0, 2, 'anthropic')] } };
 }
 
-test('code for me matches exact known hosts, regardless of route name or API path', () => {
-  for (const url of ['https://blackaicoding.com', 'https://www.blackaicoding.com/v1']) assert.equal(adapterFor(url).id, 'blackaicoding');
-  for (const url of ['https://blackaicoding.com.evil.example', 'https://other.example/blackaicoding.com']) assert.equal(adapterFor(url), null);
+test('new monitor selects OpenAI group 2 exactly and labels other-model data as a reference', () => {
+  const data = readBlackaicodingStatus(fixture(), MODELS);
+  const astra = data[MODELS[0]], sol = data[MODELS[1]];
+  assert.equal(astra.groupLabel, 'codex混合渠道--低价');
+  assert.equal(astra.historyLength, 18);
+  assert.equal(astra.history.length, 18);
+  assert.equal(astra.sampleCount, 3);
+  assert.equal(astra.uptimePct, 60);
+  assert.equal(sol.uptimePct, 70);
+  assert.equal(astra.sourceModelLabel, 'OpenAI · 其他模型（参考）');
+  assert.match(astra.modelNote, /不能代表/);
+  assert.equal(sol.sourceModelLabel, undefined);
+  assert.deepEqual(astra.history.slice(0, 3).map(item => item.state), ['available', 'degraded', 'no-data']);
+  assert.equal(astra.history.at(-1).state, 'no-data');
+  assert.equal(astra.last.at, START + 17 * 300000);
+  assert.equal(astra.metrics.ttftMs, 30000);
+  assert.equal(astra.metrics.hideTps, true);
 });
 
-test('HTML adapter preserves partial availability, empty windows and the source hourly percentage', () => {
-  const models = readBlackaicodingStatus(fixture(), MODELS, NOW);
-  assert.deepEqual(Object.keys(models), MODELS);
-  const astra = models[MODELS[0]];
-  assert.deepEqual(astra.history.map(item => item.state), ['available', 'no-data', 'unavailable', 'degraded']);
-  assert.deepEqual(astra.history.map(item => item.ok), [true, null, false, null]);
-  assert.equal(astra.uptimePct, 83.69);
-  assert.equal(models[MODELS[1]].uptimePct, 84.22);
-  assert.equal(astra.history[0].timeLabel, '23:58:30');
-  assert.equal(astra.last.endTimeLabel, '00:00:30');
-  assert.ok(astra.history[0].label.startsWith('2026-09-15'));
-  assert.ok(astra.last.label.includes('watch & <sample>'));
-  assert.equal(astra.last.at, null);
-  assert.equal(astra.sourceUpdatedAtLabel, '2026-09-16 00:00:27');
-  assert.equal(astra.stale, false);
+test('exact gpt6 beats other-model reference; sol never falls back; empty exact rows stay empty', () => {
+  const value = fixture();
+  const exact = structuredClone(value.data.items[1]); exact.model = MODELS[0]; exact.metrics.error_rate = .15;
+  value.data.items.push(exact);
+  let parsed = readBlackaicodingStatus(value, MODELS);
+  assert.equal(parsed[MODELS[0]].uptimePct, 85);
+  assert.equal(parsed[MODELS[0]].sourceModelLabel, undefined);
+  exact.buckets = [];
+  value.data.items = value.data.items.filter(row => row.model !== MODELS[1]);
+  parsed = readBlackaicodingStatus(value, MODELS);
+  assert.equal(parsed[MODELS[0]].last, null);
+  assert.equal(parsed[MODELS[1]].last, null);
+  assert.equal(parsed[MODELS[1]].sourceModelLabel, undefined);
 });
 
-test('source warning and unambiguously old snapshots are stale, even after a successful fetch', () => {
-  assert.equal(readBlackaicodingStatus(fixture({ warning: true }), MODELS, NOW)[MODELS[0]].stale, true);
-  assert.equal(readBlackaicodingStatus(fixture({ updated: '2026-09-08 07:52:27' }), MODELS, NOW)[MODELS[0]].stale, true);
+test('renamed groups, mismatched grouping and malformed coverage or data fail closed', () => {
+  for (const mutate of [
+    value => { value.code = 1; },
+    value => { value.data.group_by = 'platform'; },
+    value => { value.data.coverage.bucket_seconds = 0; },
+    value => { value.data.coverage.requested_end = 'not a date'; },
+    value => { value.data.items[0].group_name = 'another group'; },
+    value => { value.data.items.push(value.data.items[0]); },
+    value => { value.data.items[0].metrics.error_rate = 2; },
+    value => { value.data.items[0].health.overall = 'operational'; },
+    value => { value.data.items[0].buckets.push(value.data.items[0].buckets[0]); },
+  ]) { const value = fixture(); mutate(value); assert.throws(() => readBlackaicodingStatus(value, MODELS)); }
 });
 
-test('malformed page, timestamp, states and metrics reject instead of yielding healthy data', () => {
-  for (const html of ['<html>Challenge</html>', fixture().replace('2026-09-16', '2026-99-16'),
-    fixture().replace('83.69%', '101%'), fixture().replace('tick watch', 'tick unexpected'),
-    fixture().replace('1 小时可用率', 'Other metric'), fixture().replace('class="timeline"', 'class="missing"')]) {
-    assert.throws(() => readBlackaicodingStatus(html, MODELS, NOW));
-  }
-  assert.equal(readBlackaicodingStatus(fixture().replace('83.69%', '-'), MODELS, NOW)[MODELS[0]].uptimePct, null);
-  assert.equal(readBlackaicodingStatus(fixture().replace('gpt-6-astra</span>', 'unlisted</span>'), MODELS, NOW)[MODELS[0]], undefined);
+test('authorization is required; no old public monitor or relay API keys are used', async () => {
+  let calls = 0;
+  const monitor = new Availability({}, { request: async () => { calls++; throw new Error('unexpected'); } });
+  const result = await monitor.snapshot(keys.slice(0, 2));
+  assert.equal(result.rows[0].state, 'auth-required');
+  assert.equal(result.rows[0].source.url, MONITOR_URL);
+  assert.equal(result.rows[0].authorizationSite, 'blackaicoding');
+  assert.equal(calls, 0);
+  assert.equal(adapterFor('https://blackaicoding.com.evil.example'), null);
+  monitor.close();
 });
 
-test('adapter limits history to the most recent 60 windows', () => {
-  const states = ['bad', ...Array(60).fill('good')];
-  const history = readBlackaicodingStatus(fixture({ states }), MODELS, NOW)[MODELS[0]].history;
-  assert.equal(history.length, 60);
-  assert.ok(history.every(item => item.state === 'available'));
-});
-
-test('both adapters cache independently and preserve the global model selection', async () => {
-  let now = NOW;
-  let states = ['watch'];
-  let warning = false;
-  let fail = false;
+test('protected and public adapters isolate credentials; 401 retains only explicitly stale data', async () => {
+  let now = NOW, fail = false;
   const calls = [];
-  const monitor = new Availability({}, { clock: () => now, request: async url => {
+  const monitor = new Availability({}, { clock: () => now, auth: { read: async () => ({ token: TOKEN }) }, request: async (url, options) => {
     calls.push(url);
-    if (url === 'https://status.blackaicoding.com/') {
-      if (fail) throw new Error('Source failed');
-      return fixture({ states, warning });
+    if (url === BALANCE_ENDPOINT) {
+      assert.equal(options.token, TOKEN);
+      return { code: 0, data: { balance: 12.34 } };
     }
+    if (url === ENDPOINT) {
+      assert.equal(options.token, TOKEN);
+      if (fail) throw Object.assign(new Error('secret must not leak'), { status: 401 });
+      return fixture();
+    }
+    assert.equal(options.token, undefined);
     return { services: [{ model: MODELS[0], history: [{ ts: now / 1000, ok: true }] }] };
   } });
   const [astra, sol] = await Promise.all([monitor.snapshot(keys), monitor.snapshot(keys, MODELS[1])]);
-  assert.equal(calls.length, 2);
-  assert.equal(astra.rows[0].state, 'degraded');
-  assert.equal(astra.rows[0].source.url, 'https://blackaicoding.com/custom/bdba7e5ab409e0b5');
-  assert.deepEqual(astra.rows[0].history, astra.rows[1].history);
+  assert.equal(calls.length, 3);
+  assert.equal(astra.rows[0].state, 'unavailable');
   assert.equal(astra.rows[2].state, 'available');
-  assert.equal(sol.rows[0].state, 'available');
-  assert.equal(sol.rows[2].state, 'no-data');
-  assert.ok(!JSON.stringify(astra).includes('sk-private'));
-  for (const [kind, expected] of [['unknown', 'no-data'], ['bad', 'unavailable'], ['good', 'available']]) {
-    states = [kind]; now += REFRESH_MS;
-    assert.equal((await monitor.snapshot(keys)).rows[0].state, expected);
-  }
-  warning = true; now += REFRESH_MS;
-  assert.equal((await monitor.snapshot(keys)).rows[0].state, 'stale');
-  fail = true; now += REFRESH_MS;
-  const stale = (await monitor.snapshot(keys)).rows[0];
-  assert.equal(stale.state, 'stale');
-  assert.equal(stale.history.length, 1);
-  assert.match(stale.message, /刷新失败/);
+  assert.equal(sol.rows[0].uptimePct, 70);
+  now += REFRESH_MS; fail = true;
+  const expired = (await monitor.snapshot(keys)).rows[0];
+  assert.equal(expired.state, 'auth-required');
+  assert.equal(expired.history.length, 18);
+  assert.ok(!JSON.stringify(expired).includes(TOKEN));
+  assert.ok(!JSON.stringify(expired).includes('secret'));
   monitor.close();
+});
+
+test('credentials persist privately, expire, clear and remain confined to the selected directory', async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'monitor-auth-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const auth = new MonitorAuth(home);
+  assert.equal(await auth.read(), null);
+  await auth.save(TOKEN);
+  assert.equal((await new MonitorAuth(home).read()).token, TOKEN);
+  if (process.platform !== 'win32') assert.equal((await fs.stat(auth.file)).mode & 0o777, 0o600);
+  assert.equal(await new MonitorAuth(path.join(home, 'other')).read(), null);
+  await assert.rejects(auth.save('sk-not-a-login-token'));
+  assert.throws(() => validateToken(jwt(1)));
+  await fs.writeFile(auth.file, JSON.stringify({ token: jwt(1) }));
+  assert.equal(await auth.read(), null);
+  await auth.clear(); assert.equal(await auth.read(), null);
+});
+
+test('transport attaches monitor token only to the fixed authorized endpoint, and never follows redirects', async t => {
+  let calls = 0;
+  t.mock.method(https, 'get', (url, options) => {
+    calls++; assert.equal(url, ENDPOINT); assert.equal(options.headers.authorization, 'Bearer ' + TOKEN);
+    const request = new EventEmitter(); request.destroy = () => {};
+    setImmediate(() => { const response = new PassThrough(); response.statusCode = 302; request.emit('response', response); response.end(); });
+    return request;
+  });
+  const options = { outbound: { resolve: async () => ({}), agent: () => false }, signal: new AbortController().signal, token: TOKEN };
+  await assert.rejects(requestJson('https://status.input.im/api/status', options), /target rejected/);
+  assert.equal(calls, 0);
+  await assert.rejects(requestJson(ENDPOINT, options), error => error.status === 302);
+  assert.equal(calls, 1);
+});
+
+test('local authorization API validates before saving, rejects cross-origin requests and does not return credentials', async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'monitor-api-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://blackaicoding.com"\n');
+  await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys: keys.slice(0, 2) }));
+  let reject = true;
+  const app = await start({ home, proxyPort: 0, uiPort: 0, availabilityOptions: { clock: () => NOW, request: async () => {
+    if (reject) throw Object.assign(new Error('unauthorized'), { status: 401 });
+    return fixture();
+  } }, log: () => {} });
+  t.after(() => app.close());
+  const auth = new MonitorAuth(home, 'blackaicoding', require('../relay-identity').accountId(keys[0]));
+  const post = (token, origin = app.uiUrl) => fetch(app.uiUrl + '/api/availability/authorization', {
+    method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ site: 'blackaicoding', name: keys[0].name, token }),
+  });
+  assert.equal((await post(TOKEN, 'https://other.example')).status, 403);
+  assert.equal((await post(TOKEN)).status, 400);
+  assert.equal(await auth.read(), null);
+  reject = false;
+  const saved = await post(TOKEN); assert.equal(saved.status, 200);
+  assert.ok(!(await saved.text()).includes(TOKEN));
+  assert.equal((await auth.read()).token, TOKEN);
+  const snapshot = await (await fetch(app.uiUrl + '/api/availability')).json();
+  assert.equal(snapshot.rows[0].state, 'unavailable');
+  assert.equal((await post('')).status, 200);
+  assert.equal((await (await fetch(app.uiUrl + '/api/availability')).json()).rows[0].state, 'auth-required');
 });

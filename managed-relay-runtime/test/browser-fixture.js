@@ -21,11 +21,26 @@ const { start } = require('../../managed-relay-server');
       { name: 'Aixor', value: 'sk-test-aixor', baseurl: 'https://aixor.org/v1' },
       { name: 'Aixor 备用', value: 'sk-test-aixor-backup', baseurl: 'https://aixor.cc/v1' },
       { name: 'packycode项目用', value: 'sk-test-packycode', baseurl: 'https://cf.api.fan/v1' },
+      { name: 'packycode备用', value: 'sk-test-packycode-backup', baseurl: 'https://cf.api.fan/v1' },
       { name: 'Packycode 按量卡', value: 'sk-test-packycode-metered', baseurl: 'https://codex-api.packycode.com/v1' },
+      { name: 'Krill', value: 'sk-test-krill', baseurl: 'https://api-slb.krill-code.net/codex/v1' },
+      { name: 'Krill 周卡', value: 'sk-test-krill-weekly', baseurl: 'https://api.cdn-krill-ai.com/coding/v1' },
+      { name: 'Krill 月卡', value: 'sk-test-krill-monthly', baseurl: 'https://api.cdn-krill-ai.com/codex/v1' },
       { name: '其他中转', value: 'sk-test-other', baseurl }]
     : Array.from({ length: 15 }, (_, i) => ({ name: i === 0 ? '中转站甲' : i === 1 ? '备用线路✨' : `测试中转 ${i}`, value: `sk-test-${i}`, baseurl }));
+  if (process.env.RELAY_GROUPING_FIXTURE) {
+    keys[1].baseurl = keys[0].baseurl;
+    keys.splice(1, 0, { ...keys[0], name: 'INPUT 团队共享' });
+    keys.splice(4, 0, { ...keys[3], name: 'code for me 备用' });
+    const config = await fs.readFile(path.join(home, 'config.toml'), 'utf8');
+    await fs.writeFile(path.join(home, 'config.toml'), config.replace(baseurl, keys[0].baseurl));
+    await fs.writeFile(path.join(home, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: keys[0].value }));
+  }
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys }));
-  const app = await start({ home, uiPort: Number(process.env.RELAY_UI_PORT || 3791), proxyPort: Number(process.env.RELAY_PROXY_PORT || 3212) });
+  const app = await start({ home, uiPort: Number(process.env.RELAY_UI_PORT || 3791), proxyPort: Number(process.env.RELAY_PROXY_PORT || 3212),
+    ...(process.env.RELAY_LOGIN_FIXTURE ? { availabilityOptions: { request: require('./monitor-login-fixture').request,
+      packyBalanceOptions: { request: async (url, { apiKey }) => ({ code: true, data: { name: 'Packycode 演示 Key', total_available: 200000000,
+        total_granted: 250000000, total_used: 90000000, unlimited_quota: apiKey.endsWith('metered') } }) } } } : {}) });
   console.log(JSON.stringify({ ui: app.uiUrl, proxy: app.proxyUrl, home }));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => {
     await app.close();

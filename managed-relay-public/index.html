@@ -10,22 +10,63 @@
   </head>
   <body>
     <div class="shell">
-      <header class="topbar">
-        <div class="brand"><div class="mark"><i></i><i></i><i></i></div><div><p class="eyebrow">CODEX RELAY UI</p><h1>中转站管理</h1></div></div>
-        <div id="connection" class="connection"><span></span>检查服务中</div>
-      </header>
-      <main>
-        <section class="hero"><div><p class="kicker">RUNTIME ROUTING</p><h2>切换请求去向</h2><p id="provider-identity">Codex provider：—</p></div><div class="proxy-address"><span>本地代理地址</span><code id="proxy-url">—</code></div></section>
-        <section class="mode-panel"><div class="mode-copy"><p class="kicker">STEP 1 · SWITCH MODE</p><h3>选择运行方式</h3><p id="mode-description">—</p></div><div class="mode-actions"><button class="mode-button" data-mode="direct"><strong>直接配置</strong><small>切换后需重启 Codex</small></button><button class="mode-button" data-mode="proxy"><strong>本地代理</strong><small>切换后无需重启 Codex</small></button></div></section>
+      <aside class="sidebar">
+        <a class="brand" href="#routes"><div class="mark" aria-hidden="true"><i></i><i></i><i></i></div><div><strong>Codex Relay</strong><span>中转管理工作台</span></div></a>
+        <p class="nav-label">工作空间</p>
+        <nav aria-label="主导航">
+          <a href="#routes" data-page="routes" aria-current="page"><span aria-hidden="true">▦</span>中转站<span id="nav-count" class="nav-count">0</span></a>
+          <a href="#connection" data-page="connection"><span aria-hidden="true">⇄</span>运行与连接</a>
+          <a href="#settings" data-page="settings"><span aria-hidden="true">⚙</span>必要设置</a>
+        </nav>
+        <div class="sidebar-bottom"><div id="service-connection" class="connection"><span></span>检查服务中</div><p>本地工作空间 · 127.0.0.1</p></div>
+      </aside>
+      <div class="workspace">
+        <header class="workspace-header"><span>工作空间 <span class="breadcrumb-separator">/</span> <strong id="page-breadcrumb">中转站</strong></span><span class="local-badge">LOCAL</span></header>
+        <main>
+          <section id="notice" class="notice" role="status" aria-live="polite" hidden></section>
+          <section id="page-routes" class="page" aria-labelledby="routes-title">
+            <div class="page-heading"><div><p class="kicker">YOUR RELAY WORKSPACE</p><h1 id="routes-title">中转站</h1><p>管理线路、查看状态，找到合适的请求入口。</p></div><button id="add-open" class="primary" type="button"><span aria-hidden="true">＋</span> 新增中转</button></div>
+            <section id="current-route" class="current-route" aria-label="当前使用"><span class="current-dot" aria-hidden="true"></span><span class="current-route-label">当前使用</span><button id="current-route-name" type="button" disabled>正在读取…</button><span id="current-route-mode" class="mode-tag"></span><a href="#connection" class="text-link">连接设置 ↗</a></section>
+            <section id="routes-panel" aria-labelledby="list-title">
+              <div class="list-toolbar"><div class="list-heading"><h2 id="list-title">中转列表</h2><span id="count" class="count">—</span></div><div class="list-filters"><label class="search-box"><span aria-hidden="true">⌕</span><input id="route-search" type="search" aria-label="搜索名称或地址" placeholder="搜索名称或地址" autocomplete="off" /></label><label class="model-filter">模型<select id="availability-model" disabled><option value="gpt-6-astra">gpt-6-astra</option><option value="gpt-5.6-sol">gpt-5.6-sol</option></select></label></div></div>
+              <div class="list-help"><span>按中转商归组 · 拖动手柄排序</span><span>状态每 15 秒更新</span></div>
+              <div class="availability-filters" role="group" aria-label="按当前可用性筛选" aria-describedby="availability-filter-help">
+                <button type="button" data-status-filter="all" aria-pressed="true">全部 <span data-filter-count="all">0</span></button>
+                <button type="button" data-status-filter="available" aria-pressed="false">当前可用 <span data-filter-count="available">0</span></button>
+                <button type="button" data-status-filter="unavailable" aria-pressed="false">当前不可用 <span data-filter-count="unavailable">0</span></button>
+              </div>
+              <p id="availability-filter-help" class="filter-help">按检测条最后一格筛选：红色为不可用，非红色为可用；无检测记录仅在全部显示。</p>
+              <p id="list-feedback" class="panel-hint" role="status" aria-live="polite"></p>
+              <div id="route-list" class="route-list"></div>
+              <div id="route-empty" class="empty-state" role="status" aria-live="polite" hidden><strong></strong><p></p></div>
+            </section>
+          </section>
+          <section id="page-connection" class="page" aria-labelledby="connection-title" hidden>
+            <div class="page-heading"><div><p class="kicker">RUNTIME & NETWORK</p><h1 id="connection-title">运行与连接</h1><p>配置请求路由和上游网络，查看最近的连接状态。</p></div></div>
+            <section class="connection-overview"><p id="provider-identity">Codex provider：—</p><div class="proxy-address"><span>本地代理地址</span><code id="proxy-url">—</code></div></section>
+        <section class="mode-panel"><div class="mode-copy"><p class="kicker">ROUTING MODE</p><h3>选择运行方式</h3><p id="mode-description">—</p></div><div class="mode-actions"><button class="mode-button" data-mode="direct"><strong>直接配置</strong><small>切换后需重启 Codex</small></button><button class="mode-button" data-mode="proxy"><strong>本地代理</strong><small>切换后无需重启 Codex</small></button></div></section>
         <section id="install-panel" class="install-panel">
-          <div><p class="kicker">STEP 2 · CODEX CONNECTION</p><h3>接入 Codex 本地代理</h3><p>先在上方选择“本地代理”，再点击“接入本地代理”；切回直连时点击“恢复接入前的直连配置”。首次接入或恢复后需重启一次 Codex。</p></div>
+          <div><p class="kicker">CODEX CONNECTION</p><h3>接入 Codex 本地代理</h3><p>选择本地代理并接入后，换站无需重启。首次接入或恢复直连后，需重启一次 Codex。</p></div>
           <div class="connection-actions"><button id="install-button" class="secondary" type="button" aria-describedby="install-feedback">接入本地代理</button><button id="restore-button" class="secondary" type="button">恢复接入前的直连配置</button></div>
           <p id="install-feedback" class="install-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
         </section>
         <section class="request-status"><p id="last-request" role="status">尚未读取请求状态。</p><button id="refresh-status" type="button" title="刷新状态" aria-label="刷新状态">↻</button></section>
-        <section id="notice" class="notice" hidden></section>
+        <section class="network-panel" aria-labelledby="network-title">
+          <h3 id="network-title">上游网络</h3>
+          <p id="network-status" role="status">正在读取出站设置。</p>
+          <form id="network-form">
+            <label>出站方式<select id="network-mode" name="mode"><option value="auto">自动跟随系统代理</option><option value="direct">直连</option><option value="proxy">指定代理</option></select></label>
+            <label id="network-proxy-field" hidden>代理地址<input id="network-proxy-url" name="proxyUrl" type="url" placeholder="http://127.0.0.1:7892" autocomplete="off" /></label>
+            <button class="secondary" type="submit">保存网络设置</button>
+            <button id="network-test" class="secondary" type="button">检查所选中转连接</button>
+          </form>
+          <p id="network-result" role="status" aria-live="polite"></p>
+        </section>
+          </section>
+          <section id="page-settings" class="page" aria-labelledby="settings-title" hidden>
+            <div class="page-heading"><div><p class="kicker">WORKSPACE SETTINGS</p><h1 id="settings-title">必要设置</h1><p>管理配置存放位置与本机应用的启动路径。</p></div></div>
         <section class="home-panel" aria-labelledby="home-title">
-          <h3 id="home-title">目录与应用</h3>
+          <h3 id="home-title">Codex 配置目录</h3>
           <dl id="home-status" class="home-details" role="status"><div><dt>目录设置</dt><dd>正在读取目录设置。</dd></div></dl>
           <form id="home-form" class="path-form">
             <label>Codex 配置目录<input id="home-path" name="home" type="text" placeholder="~/.codex" autocomplete="off" spellcheck="false" /></label>
@@ -43,37 +84,20 @@
             <p id="app-path-result" role="status" aria-live="polite"></p>
           </div>
         </section>
-        <section class="network-panel" aria-labelledby="network-title">
-          <h3 id="network-title">STEP 3 · 上游网络</h3>
-          <p id="network-status" role="status">正在读取出站设置。</p>
-          <form id="network-form">
-            <label>出站方式<select id="network-mode" name="mode"><option value="auto">自动跟随系统代理</option><option value="direct">直连</option><option value="proxy">指定代理</option></select></label>
-            <label id="network-proxy-field" hidden>代理地址<input id="network-proxy-url" name="proxyUrl" type="url" placeholder="http://127.0.0.1:7892" autocomplete="off" /></label>
-            <button class="secondary" type="submit">保存网络设置</button>
-            <button id="network-test" class="secondary" type="button">检查所选中转连接</button>
-          </form>
-          <p id="network-result" role="status" aria-live="polite"></p>
-        </section>
-        <section class="content-grid">
-          <section id="routes-panel" class="panel">
-            <div class="panel-head routes-panel-head">
-              <div class="routes-heading"><p class="kicker">STEP 4 · AVAILABLE ROUTES</p><h3>中转站列表</h3></div>
-              <span id="count" class="count">—</span>
-              <div id="current-route" class="current-route" role="region" aria-labelledby="current-route-label" data-active="false">
-                <span id="current-route-label" class="current-route-label">当前使用</span>
-                <p id="current-route-message" class="current-route-message" role="status" aria-live="polite">正在读取…</p>
-                <div id="current-route-card" hidden></div>
-              </div>
-              <p id="list-feedback" class="panel-hint" role="status" aria-live="polite"></p>
-            </div>
-            <div class="availability-toolbar"><label for="availability-model">可用性模型<select id="availability-model" disabled><option value="gpt-6-astra">gpt-6-astra</option><option value="gpt-5.6-sol">gpt-5.6-sol</option></select></label><span>15 秒刷新</span></div>
-            <div id="route-list" class="route-list"></div>
           </section>
-          <aside class="panel add-panel"><div class="panel-head"><div><p class="kicker">NEW ROUTE</p><h3>新增中转站</h3></div><span class="plus">+</span></div><form id="add-form"><label>名称<input name="name" placeholder="例如：团队共享" autocomplete="organization" required /></label><label>API Key<input name="value" type="password" placeholder="sk-..." autocomplete="new-password" required /></label><label>Base URL<input name="baseurl" type="url" placeholder="https://api.example.com/v1" required /></label><button class="primary" type="submit">保存配置 <span>→</span></button><p id="form-message" class="message"></p></form></aside>
-        </section>
-      </main>
-      <footer><span>本地服务已绑定 127.0.0.1</span><span class="rule"></span><span>直接配置会自动备份 Codex 配置与认证文件</span></footer>
+        </main>
+        <footer><span>Codex Relay</span><span>配置修改自动备份 · 密钥仅保存在本机</span></footer>
+      </div>
     </div>
+    <dialog id="add-dialog" aria-labelledby="add-title">
+      <form id="add-form"><p class="kicker">NEW ROUTE</p><h2 id="add-title">新增中转</h2><p class="dialog-description">相同 Base URL 的配置会自动归入同一个中转商。</p>
+        <label>名称<input name="name" maxlength="2000" placeholder="例如：团队共享" autocomplete="off" required autofocus /></label>
+        <label>API Key<input name="value" type="password" maxlength="2000" placeholder="sk-..." autocomplete="new-password" required /></label>
+        <label>Base URL<input name="baseurl" type="url" maxlength="2000" placeholder="https://api.example.com/v1" required /></label>
+        <p id="form-message" class="message" role="status" aria-live="polite"></p>
+        <div class="edit-actions"><button id="add-cancel" type="button">取消</button><button id="add-save" class="secondary" type="submit">保存配置</button></div>
+      </form>
+    </dialog>
     <dialog id="edit-dialog" aria-labelledby="edit-title">
       <form id="edit-form">
         <h2 id="edit-title">编辑中转站</h2>
@@ -84,7 +108,79 @@
         <div class="edit-actions"><button id="edit-cancel" type="button">取消</button><button id="edit-save" class="secondary" type="submit">保存修改</button></div>
       </form>
     </dialog>
+    <div id="monitor-auth-toast" class="auth-toast" role="status" aria-live="polite" aria-atomic="true" hidden>
+      <span class="auth-toast-icon" aria-hidden="true">✓</span>
+      <div><span class="auth-toast-message"></span><small class="auth-toast-expiry" hidden></small></div>
+    </div>
+    <dialog id="monitor-auth-dialog" aria-labelledby="monitor-auth-title">
+      <form id="monitor-auth-form">
+        <h2 id="monitor-auth-title">code for me · 监控授权</h2>
+        <p id="monitor-auth-description">使用 code for me 账号登录，自动读取监控和账号余额。</p>
+        <fieldset id="monitor-login-fields">
+          <label>账号或邮箱<input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="320" placeholder="code for me 账号或邮箱" required /></label>
+          <label>密码<input name="password" type="password" autocomplete="current-password" maxlength="4096" placeholder="登录密码" required /></label>
+          <label id="monitor-auth-agreement" class="monitor-auth-agreement" hidden><input name="agreement" type="checkbox" /><span>我已阅读并同意 <span id="monitor-agreement-links"><a href="https://aixor.cc/user-agreement" target="_blank" rel="noreferrer">Aixor 用户协议</a></span></span></label>
+        </fieldset>
+        <fieldset id="monitor-otp-fields" hidden disabled>
+          <label>二次验证码<input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="身份验证器中的 6 位验证码" required /></label>
+        </fieldset>
+        <p class="monitor-auth-help">密码仅用于本次登录，不会保存。授权自动保存在本机，到期后在这里重新登录即可。</p>
+        <details class="monitor-auth-advanced">
+          <summary id="monitor-auth-manual-title">无法登录？使用 auth_token 授权</summary>
+          <ol id="monitor-token-steps">
+            <li>打开 <a id="monitor-auth-site" href="https://blackaicoding.com/" target="_blank" rel="noreferrer">code for me</a> 并登录。</li>
+            <li>Chrome / Edge 按 <kbd>F12</kbd>（Mac 可按 <kbd>⌥⌘I</kbd>）打开开发者工具，切换到 <strong>Application（应用）</strong>；找不到时展开顶部 <strong>»</strong> 菜单。</li>
+            <li>左侧展开 <strong>Local Storage（本地存储）</strong>，选择地址栏对应的当前站点，如 <code id="monitor-auth-origin">https://blackaicoding.com</code>。</li>
+            <li>找到键名 <code id="monitor-token-key">auth_token</code>，双击右侧 <strong>Value（值）</strong> 单元格，复制完整内容，粘贴到下面并验证。只复制值，不包含键名、引号或 Bearer 前缀。</li>
+          </ol>
+          <ol id="monitor-cookie-steps" hidden>
+            <li>打开 <a id="monitor-cookie-site" href="https://aixor.cc/wallet" target="_blank" rel="noreferrer">Aixor 钱包</a> 并登录。</li>
+            <li>Chrome / Edge 按 F12（Mac：⌥⌘I）打开开发者工具 → <strong>Network（网络）</strong>，刷新页面。</li>
+            <li>搜索 <code>/api/user/self</code>，点开该请求 → <strong>Headers（标头）</strong> → <strong>Request Headers（请求标头）</strong>。</li>
+            <li>复制 <strong>Cookie</strong> 的完整值到下方（不含 Cookie: 前缀），再复制 <strong>New-Api-User</strong> 的数字值。<span id="monitor-cookie-fallback">若看不到用户 ID，可在 Application → Local Storage → https://aixor.cc 中复制 uid。</span></li>
+            <li>点击「验证并保存会话」。<span id="monitor-cookie-note">会话失效后重新登录即可。</span></li>
+          </ol>
+          <label><span id="monitor-credential-label">auth_token</span><input name="token" type="password" autocomplete="off" spellcheck="false" maxlength="16000" placeholder="粘贴 auth_token" /></label>
+          <label id="monitor-user-id-field" hidden>用户 ID（New-Api-User）<input name="userId" type="text" inputmode="numeric" autocomplete="off" maxlength="16" placeholder="数字用户 ID" /></label>
+          <button id="monitor-token-submit" type="button">验证并保存 auth_token</button>
+        </details>
+        <p id="monitor-auth-feedback" role="status" aria-live="polite"></p>
+        <button id="monitor-auth-back" class="monitor-auth-back" type="button" hidden>返回账号登录</button>
+        <div class="monitor-auth-actions"><button id="monitor-auth-clear" type="button">清除授权</button><button id="monitor-auth-cancel" type="button">关闭</button><button id="monitor-auth-submit" class="secondary" type="submit">登录并授权</button></div>
+      </form>
+    </dialog>
+    <dialog id="account-binding-dialog" aria-labelledby="account-binding-title">
+      <form id="account-binding-form">
+        <h2 id="account-binding-title">设为同一账号</h2>
+        <p id="account-binding-description"></p>
+        <p id="account-binding-source" class="binding-source"></p>
+        <div id="account-bound-members"></div>
+        <h3>选择要共用的账号</h3>
+        <div id="account-binding-options"></div>
+        <p id="account-binding-help" class="dialog-description"></p>
+        <p id="account-binding-feedback" role="status" aria-live="polite"></p>
+        <div class="binding-actions"><button id="account-unbind-all" type="button" hidden>全部解绑</button><button id="account-binding-cancel" type="button">取消</button><button id="account-binding-save" class="secondary" type="submit">设为同一账号</button></div>
+      </form>
+    </dialog>
+    <dialog id="packy-balance-dialog" aria-labelledby="packy-balance-title">
+      <form id="packy-balance-form">
+        <h2 id="packy-balance-title">Packycode · 余额设置</h2>
+        <p>所有 Packycode 中转共用查询地址，余额按各自保存的 API Key 查询。</p>
+        <label>余额接口基础地址<input name="api_base_url" type="url" required maxlength="2000" value="https://slb-v1.api.fan" /></label>
+        <p>后端将携带中转列表中的 Key 请求此地址，自动追加 /api/usage/token/。</p>
+        <label>单次超时（秒）<input name="request_timeout_seconds" type="number" min="1" max="60" value="10" required /></label>
+        <label>自动查询间隔（秒）<input name="refresh_interval_seconds" type="number" min="15" max="86400" value="1800" required /></label>
+        <p>默认 1800 秒（30 分钟）。查询失败最多重试 3 次，并保留上次成功余额。</p>
+        <p id="packy-balance-feedback" role="status" aria-live="polite"></p>
+        <div class="monitor-auth-actions"><button id="packy-balance-cancel" type="button">关闭</button><button class="secondary" type="submit">保存设置</button></div>
+      </form>
+    </dialog>
+    <script src="/route-groups.js" defer></script>
+    <script src="/packy-login.js" defer></script>
+    <script src="/monitor-auth.js" defer></script>
+    <script src="/packy-balance.js" defer></script>
     <script src="/availability.js" defer></script>
+    <script src="/account-bindings.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

@@ -1,78 +1,92 @@
-const { parse } = require('parse5');
+const GROUP_ID = 2;
+const GROUP_NAME = 'codex混合渠道--低价';
+const MONITOR_URL = 'https://blackaicoding.com/monitor?range=90m&platform=openai&group=2&group_by=platform_group_model&health_mode=overall&tab=models';
+const ENDPOINT = 'https://blackaicoding.com/api/v1/channel-monitor-v2/matrix?range=90m&platform=openai&group_id=2&group_by=platform_group_model';
 
-function elements(node, matches) {
-  const found = [];
-  const visit = current => {
-    if (current.tagName && matches(current)) found.push(current);
-    for (const child of current.childNodes || []) visit(child);
+function time(value) {
+  if (typeof value !== 'string' || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) throw new Error('Invalid monitor timestamp');
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) throw new Error('Invalid monitor timestamp');
+  return at;
+}
+
+function number(value, max = Infinity) {
+  if (value == null) return null;
+  if (!Number.isFinite(value) || value < 0 || value > max) throw new Error('Invalid monitor metric');
+  return value;
+}
+
+function health(value) {
+  if (!value || !['healthy', 'warning', 'critical', 'unknown'].includes(value.overall)) throw new Error('Invalid monitor health');
+  const score = number(value.score, 100);
+  return { state: ({ healthy: 'available', warning: 'degraded', critical: 'unavailable', unknown: 'no-data' })[value.overall], score };
+}
+
+function metrics(value) {
+  if (!value || typeof value !== 'object') throw new Error('Missing monitor metrics');
+  const errorRate = number(value.error_rate, 1);
+  return {
+    // The monitor UI displays 1 - error_rate (success_rate uses a different denominator).
+    uptimePct: errorRate == null ? null : (1 - errorRate) * 100,
+    ttftMs: number(value.ttft?.avg_ms), latencyMs: number(value.duration?.avg_ms),
+    cacheRatePct: value.cache_rate == null ? null : number(value.cache_rate, 1) * 100,
   };
-  visit(node);
-  return found;
 }
 
-const attribute = (node, name) => node.attrs?.find(item => item.name === name)?.value || '';
-const hasClass = (node, name) => attribute(node, 'class').split(/\s+/).includes(name);
-const text = node => node.nodeName === '#text' ? node.value : (node.childNodes || []).map(text).join('');
-
-function percentage(value) {
-  if (value === '-') return null;
-  if (!/^\d+(?:\.\d+)?%$/.test(value)) throw new Error('Invalid status percentage');
-  const number = Number(value.slice(0, -1));
-  if (number > 100) throw new Error('Invalid status percentage');
-  return number;
-}
-
-function readBlackaicodingStatus(html, models, now = Date.now()) {
-  if (typeof html !== 'string') throw new Error('Invalid status page');
-  const document = parse(html);
-  const meta = elements(document, node => hasClass(node, 'meta'))[0];
-  const updated = meta && text(meta).match(/更新时间[：:]\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/)?.[1];
-  if (!updated) throw new Error('Missing status snapshot time');
-  // The source omits its timezone. Keep its wall-clock labels instead of inventing UTC timestamps.
-  const wallTime = Date.parse(updated.replace(' ', 'T') + 'Z');
-  if (!Number.isFinite(wallTime) || new Date(wallTime).toISOString().slice(0, 19).replace('T', ' ') !== updated) {
-    throw new Error('Invalid status snapshot time');
-  }
-  const stale = elements(document, node => hasClass(node, 'warn')).length > 0 || now - wallTime > 14 * 3600000 + 180000;
-  const table = elements(document, node => node.tagName === 'table').find(node => elements(node, child => hasClass(child, 'model-name')).length);
-  if (!table) throw new Error('Missing status components');
-  const headers = elements(table, node => node.tagName === 'th').map(node => text(node).trim());
-  const rateColumn = headers.findIndex(value => /^1\s*小时可用率$/.test(value));
-  if (rateColumn < 0) throw new Error('Missing hourly status metric');
+function readBlackaicodingStatus(payload, models) {
+  const data = payload?.data;
+  if (payload?.code !== 0 || data?.group_by !== 'platform_group_model' || !Array.isArray(data.items)) throw new Error('Invalid monitor matrix');
+  const coverage = data.coverage;
+  const step = number(coverage?.bucket_seconds, 5400) * 1000;
+  const start = time(coverage?.requested_start);
+  const end = time(coverage?.requested_end);
+  const dataThrough = time(coverage?.data_through);
+  if (step < 60000 || end <= start || end - start !== 90 * 60000 || start % step || dataThrough > end) throw new Error('Invalid monitor coverage');
+  const count = Math.ceil((end - start) / step);
+  if (count > 90) throw new Error('Invalid monitor bucket count');
+  const rows = data.items.filter(item => item?.platform === 'openai' && item.group_id === GROUP_ID);
+  if (rows.some(item => item.group_name !== GROUP_NAME)) throw new Error('Monitor group changed');
   const result = {};
-  for (const row of elements(table, node => node.tagName === 'tr')) {
-    const name = elements(row, node => hasClass(node, 'model-name'))[0];
-    const model = name && text(name).trim();
-    if (!models.includes(model)) continue;
-    if (result[model]) throw new Error('Duplicate status model');
-    const timeline = elements(row, node => hasClass(node, 'timeline'))[0];
-    const ticks = timeline && elements(timeline, node => hasClass(node, 'tick'));
-    const cells = elements(row, node => node.tagName === 'td');
-    if (!ticks?.length || !cells[rateColumn]) throw new Error('Incomplete status row');
-    const history = ticks.slice(-60).map((tick, index, visible) => {
-      const states = { good: 'available', watch: 'degraded', bad: 'unavailable', unknown: 'no-data' };
-      const kinds = Object.keys(states).filter(kind => hasClass(tick, kind));
-      if (kinds.length !== 1) throw new Error('Invalid status interval');
-      const state = states[kinds[0]];
-      const title = attribute(tick, 'title');
-      if (!title) throw new Error('Missing status interval details');
-      const start = Math.floor(wallTime / 30000) * 30000 - (visible.length - 1 - index) * 30000;
-      const startLabel = new Date(start).toISOString().slice(11, 19);
-      const endLabel = new Date(start + 30000).toISOString().slice(11, 19);
-      return {
-        at: null, state, ok: state === 'available' ? true : state === 'unavailable' ? false : null,
-        timeLabel: startLabel, endTimeLabel: endLabel,
-        label: new Date(start).toISOString().slice(0, 10) + ' ' + startLabel + ' - ' + endLabel + '\n' + title.slice(0, 500),
-        latencyMs: null, error: null,
-      };
-    });
-    result[model] = {
-      history, last: history.at(-1), stale,
-      uptimePct: percentage(text(cells[rateColumn]).trim()),
-      uptimeLabel: '1 小时可用率', historyLabel: '时段', sourceUpdatedAtLabel: updated,
+  for (const model of models) {
+    let candidates = rows.filter(item => item.model === model);
+    const fallback = candidates.length === 0 && model === 'gpt-6-astra';
+    if (fallback) candidates = rows.filter(item => item.model === '__other__');
+    if (candidates.length > 1) throw new Error('Ambiguous monitor model');
+    const row = candidates[0];
+    const status = {
+      groupLabel: GROUP_NAME, historyLength: count, historyLabel: '有数据时段',
+      uptimeLabel: '90 分钟成功率', history: [], last: null, uptimePct: null, sampleCount: 0,
+      sampleTimeLabel: '统计截至', staleAfterMs: step + 180000,
+      noDataMessage: '样本不足，整体健康度未知',
+      ...(fallback && row ? { sourceModelLabel: 'OpenAI · 其他模型（参考）',
+        modelNote: '源站未单列 gpt-6-astra；此处为“其他模型”混合统计，不能代表 gpt6 独立可用性。' } : {}),
     };
+    result[model] = status;
+    if (!row) continue;
+    if (!Array.isArray(row.buckets)) throw new Error('Invalid monitor buckets');
+    const buckets = new Map();
+    for (const bucket of row.buckets) {
+      const at = time(bucket?.bucket_start);
+      if (at < start || at >= end || at % step || buckets.has(at)) throw new Error('Invalid monitor bucket time');
+      const { state, score } = health(bucket.health);
+      const values = metrics(bucket.metrics);
+      buckets.set(at, { at, state, ok: state === 'available', ...values, healthScore: score });
+    }
+    status.history = Array.from({ length: count }, (_, index) => {
+      const at = start + index * step;
+      return buckets.get(at) || { at, state: 'no-data', ok: null };
+    });
+    status.history[0].timeLabel = '90 分钟前';
+    status.history.at(-1).endTimeLabel = '现在';
+    status.sampleCount = buckets.size;
+    if (!buckets.size) continue;
+    const current = health(row.health);
+    const aggregate = metrics(row.metrics);
+    status.uptimePct = aggregate.uptimePct;
+    status.metrics = { ttftMs: aggregate.ttftMs, latencyMs: aggregate.latencyMs, cacheRatePct: aggregate.cacheRatePct, hideTps: true, ttftLabel: '平均首 Token' };
+    status.last = { at: dataThrough, state: current.state, ok: current.state === 'available' };
   }
   return result;
 }
 
-module.exports = { readBlackaicodingStatus };
+module.exports = { readBlackaicodingStatus, MONITOR_URL, ENDPOINT };

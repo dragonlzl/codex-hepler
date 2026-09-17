@@ -9,7 +9,6 @@ set "RUNTIME=%ROOT%managed-relay-runtime"
 if not exist "%RUNTIME%\node_modules\toml-eslint-parser" goto install
 if not exist "%RUNTIME%\node_modules\proxy-agent" goto install
 if not exist "%RUNTIME%\node_modules\proxy-from-env" goto install
-if not exist "%RUNTIME%\node_modules\parse5" goto install
 goto run
 
 :install

@@ -1,6 +1,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { accountId, providerId, merchantId } = require('./relay-identity');
+const { bindingModel, updateBindingsForEdit } = require('./account-bindings');
 const { parseTOML, getStaticTOMLValue } = require('toml-eslint-parser');
 
 const problem = (message, status = 409) => Object.assign(new Error(message), { status });
@@ -69,6 +71,9 @@ function validateEntry(entry) {
 
 function mask(value) { return value ? `${value.slice(0, 3)}********${value.slice(-4)}` : ''; }
 function entryRevision(entry) { return crypto.createHash('sha256').update(JSON.stringify(entry)).digest('hex'); }
+function packyBalanceSource(state, name) {
+  return Object.hasOwn(state.packyBalanceSources || {}, name) && state.packyBalanceSources[name] === 'account' ? 'account' : 'api-key';
+}
 
 function orderedKeys(keys, state) {
   const byName = new Map(keys.map(entry => [entry.name, entry]));
@@ -121,7 +126,8 @@ class ConfigStore {
   }
 
   directEntry(keys, current) {
-    return keys.find(entry => sameUrl(entry.baseurl, current.info.baseUrl) && entry.value === current.auth.OPENAI_API_KEY) || null;
+    const matches = entry => sameUrl(entry.baseurl, current.info.baseUrl) && entry.value === current.auth.OPENAI_API_KEY;
+    return keys.find(entry => entry.name === current.state.directName && matches(entry)) || keys.find(matches) || null;
   }
 
   async status() {
@@ -133,6 +139,7 @@ class ConfigStore {
     const active = current.proxyInstalled ? selected : direct;
     const ordered = orderedKeys(config.keys, current.state);
     const pinned = new Set(Array.isArray(current.state?.pinned) ? current.state.pinned : []);
+    const bindings = bindingModel(config.keys, current.state, this.home);
     const sessionText = await readText(this.sessionPath, true);
     const session = sessionText === null ? null : JSON.parse(sessionText);
     return {
@@ -145,7 +152,11 @@ class ConfigStore {
       writeBlocked: (await readText(this.journalPath, true)) !== null,
       listActionsAvailable: true,
       editAvailable: true,
-      keys: ordered.map(entry => ({ name: entry.name, baseurl: entry.baseurl, maskedValue: mask(entry.value), revision: entryRevision(entry), active: entry.name === active?.name, pinned: pinned.has(entry.name) })),
+      accountBindingAvailable: true, accountBindingsRevision: bindings.revision,
+      packyBalanceSourceAvailable: true,
+      keys: ordered.map(entry => ({ name: entry.name, baseurl: entry.baseurl, providerId: providerId(entry.baseurl), ...bindings.describe(entry),
+        ...(merchantId(entry.baseurl) === 'packycode' ? { balanceSource: packyBalanceSource(current.state, entry.name) } : {}),
+        maskedValue: mask(entry.value), revision: entryRevision(entry), active: entry.name === active?.name, pinned: pinned.has(entry.name) })),
     };
   }
 
@@ -221,6 +232,7 @@ class ConfigStore {
       await this.commit([
         { file: this.authPath, before: current.authText, after: jsonText({ ...current.auth, OPENAI_API_KEY: entry.value }) },
         { file: this.configPath, before: current.info.text, after: updated },
+        { file: this.statePath, before: current.stateText, after: jsonText({ ...current.state, version: 2, directName: entry.name }) },
       ]);
       return { restartRequired: true, message: `已写入「${entry.name}」的直连配置，请重启 Codex。` };
     });
@@ -285,16 +297,24 @@ class ConfigStore {
       });
       if (config.keys.some((item, i) => i !== index && item.name === entry.name)) throw problem('已存在同名中转站。');
       const current = await this.read();
+      const bindings = bindingModel(config.keys, current.state, this.home);
       config.keys[index] = { ...original, ...entry };
       const changes = [{ file: this.keysPath, before: raw, after: jsonText(config) }];
+      const state = { ...current.state };
+      if (Object.hasOwn(state.packyBalanceSources || {}, originalName)) {
+        state.packyBalanceSources = { ...state.packyBalanceSources };
+        delete state.packyBalanceSources[originalName];
+        if (merchantId(entry.baseurl) === 'packycode') state.packyBalanceSources = { ...state.packyBalanceSources, [entry.name]: packyBalanceSource(current.state, originalName) };
+      }
+      if (current.state.accountBindings) state.accountBindings = updateBindingsForEdit(bindings, original, entry, config.keys);
       if (entry.name !== originalName) {
-        const state = { ...current.state };
         if (state.activeName === originalName) state.activeName = entry.name;
+        if (state.directName === originalName) state.directName = entry.name;
         for (const field of ['order', 'pinned']) {
           if (Array.isArray(state[field])) state[field] = state[field].filter(name => name !== entry.name).map(name => name === originalName ? entry.name : name);
         }
-        if (JSON.stringify(state) !== JSON.stringify(current.state)) changes.push({ file: this.statePath, before: current.stateText, after: jsonText(state) });
       }
+      if (JSON.stringify(state) !== JSON.stringify(current.state)) changes.push({ file: this.statePath, before: current.stateText, after: jsonText(state) });
       await this.commit(changes);
       const connectionChanged = entry.value !== original.value || !sameUrl(entry.baseurl, original.baseurl);
       const activeProxy = current.proxyInstalled && current.state.activeName === originalName;
@@ -303,6 +323,74 @@ class ConfigStore {
           : !current.proxyInstalled && connectionChanged ? '中转信息已保存。要应用到 Codex，请点击该中转的“切换”，再重启 Codex。'
             : '中转信息已保存。',
       };
+    });
+  }
+
+  setPackyBalanceSource(payload) {
+    return this.serialize(async () => {
+      if (!['api-key', 'account'].includes(payload?.source)) throw problem('请选择 API Key 限额或登录账号余额。', 400);
+      const { config } = await this.keys(), current = await this.read();
+      const entry = config.keys.find(entry => entry.name === payload.name);
+      if (!entry || merchantId(entry.baseurl) !== 'packycode') throw problem('请选择 Packycode 子项。', 400);
+      if (payload.revision !== entryRevision(entry) || payload.previousSource !== packyBalanceSource(current.state, entry.name)) throw problem('子项配置已变化，请刷新后重试。', 409);
+      const next = { ...current.state, packyBalanceSources: { ...current.state.packyBalanceSources, [entry.name]: payload.source } };
+      await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText(next) }]);
+      return { message: '已保存该子项的余额来源。' };
+    });
+  }
+
+  bindAccounts(payload, prepareAuthorization = async () => []) {
+    return this.serialize(async () => {
+      if (typeof payload?.targetName !== 'string' || !Array.isArray(payload.names) || !payload.names.length || payload.names.some(name => typeof name !== 'string')) throw problem('请选择要绑定的账号。', 400);
+      const { config } = await this.keys();
+      const current = await this.read();
+      const model = bindingModel(config.keys, current.state, this.home);
+      if (payload.revision !== model.revision) throw problem('账号或绑定关系已变化，请关闭弹窗并重新选择。');
+      const find = name => {
+        const entry = config.keys.find(entry => entry.name === name);
+        if (!entry) throw problem('中转配置已变化，请刷新后重试。');
+        return { name: entry.name, baseurl: entry.baseurl, ...model.describe(entry) };
+      };
+      const target = find(payload.targetName), selected = payload.names.map(find);
+      if (selected.some(entry => entry.merchantId !== target.merchantId)) throw problem('只能绑定同一中转商的账号。', 400);
+      const owners = new Set([target.accountId, ...selected.map(entry => entry.accountId)]);
+      if (owners.size < 2) throw problem('这些配置已经属于同一账号。', 400);
+      const existing = model.records.find(record => record.id === target.accountBindingId);
+      const consumed = model.records.filter(record => owners.has(record.id));
+      const members = [...new Set([...consumed.flatMap(record => record.members), ...[target, ...selected].map(entry => entry.naturalAccountId)])];
+      const binding = { id: existing?.id || crypto.randomBytes(32).toString('hex'), merchant: target.merchantId,
+        members, sourceId: existing?.sourceId || target.naturalAccountId };
+      const records = model.records.filter(record => !owners.has(record.id)); records.push(binding);
+      const next = { ...current.state, version: 2, accountBindings: records };
+      bindingModel(config.keys, next, this.home); // Validate ownership before copying credentials or committing.
+      const changes = await prepareAuthorization({ target, binding });
+      await this.commit([...changes, { file: this.statePath, before: current.stateText, after: jsonText(next) }]);
+      return { message: '已设为同一账号，登录、余额和订阅将共用。', merchant: target.merchantId, affectedAccounts: [...owners, binding.id] };
+    });
+  }
+
+  unbindAccount(payload) {
+    return this.serialize(async () => {
+      const { config } = await this.keys();
+      const current = await this.read();
+      const model = bindingModel(config.keys, current.state, this.home);
+      if (payload?.revision !== model.revision) throw problem('账号或绑定关系已变化，请关闭弹窗并重新选择。');
+      const entry = config.keys.find(entry => entry.name === payload.name);
+      const binding = entry && model.byNatural.get(accountId(entry));
+      if (!binding || binding.id !== payload.accountId) throw problem('该账号的绑定关系已变化，请刷新后重试。');
+      if (payload.all !== undefined && typeof payload.all !== 'boolean') throw problem('解绑参数无效。', 400);
+      let records = model.records;
+      if (payload.all) records = records.filter(record => record.id !== binding.id);
+      else {
+        const id = accountId(entry);
+        binding.members = binding.members.filter(member => member !== id);
+        if (binding.sourceId === id) binding.sourceId = binding.members.find(member => model.natural.has(member)) || binding.members[0];
+        records = records.filter(record => record.members.length);
+      }
+      const next = { ...current.state, version: 2, accountBindings: records };
+      await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText(next) }]);
+      return { message: payload.all ? '已全部解绑，各账号恢复原有独立授权。' : '已解绑该账号，其余成员继续共用授权。',
+        merchant: binding.merchant, affectedAccounts: [binding.id, ...binding.members, accountId(entry)] };
     });
   }
 

@@ -36,7 +36,7 @@
 - Windows 路径推荐像上面这样使用 `/`，也可以按标准 JSON 把每个 `\` 写成 `\\`。路径字段兼容直接粘贴常见的单反斜杠路径，但这种写法可能被其他 JSON 工具判为无效；有歧义的转义写法请改用 `/`。
 - `codexAppPath`：Codex 桌面应用位置，解决「未找到 Codex 桌面应用」并让 `start-codex-local.*` 能找到应用。Windows 填 `ChatGPT.exe`、`Codex.exe` 的完整路径或它所在目录，macOS 填 `.app` 目录。填写目录时优先 `ChatGPT.exe`，找不到再使用 `Codex.exe`；要指定启动哪一个，填写对应文件的完整路径。
 - `codexHome`：Codex 配置目录（含 `config.toml`、`key_config.json`），等价于在页面上保存「CODEX 目录」，但随项目分发。
-- 页面「目录与应用」可分别保存 Codex 配置目录和 ChatGPT 应用路径。应用路径写入同一 JSON 的 `codexAppPath`，完整展示已填写的路径，留空恢复自动查找；下一次通过启动脚本启动时生效。
+- 页面「必要设置」可分别保存 Codex 配置目录和 ChatGPT 应用路径。应用路径写入同一 JSON 的 `codexAppPath`，完整展示已填写的路径，留空恢复自动查找；下一次通过启动脚本启动时生效。
 - 两个字段都可以省略，环境变量 `CODEX_APP_PATH` / `CODEX_HOME` 仍优先于它们；留空时按各自平台自动探测。
 - 本机的 `codex-relay.config.json` 已在 `.gitignore` 中忽略，**只有 `codex-relay.config.example.json` 会进版本库**。
 
