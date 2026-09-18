@@ -3,7 +3,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
-const { configPath, loadCodexConfig, resolveCodexPaths, configHint } = require('./codex-config');
+const { configPath, loadCodexConfig, resolveCodexPaths, configHint, expandPath } = require('./codex-config');
 
 const run = promisify(execFile);
 const LOCAL_HOSTS = ['127.0.0.1', 'localhost', '::1'];
@@ -12,9 +12,10 @@ function bypassList(...values) {
   return [...new Set([...values.flatMap(value => (value || '').split(',').map(s => s.trim()).filter(Boolean)), ...LOCAL_HOSTS])].join(',');
 }
 
-function launchArguments(app, values) {
+function launchArguments(app, values, home) {
   const bypass = bypassList(...values);
-  return ['-a', app, '--env', 'NO_PROXY=' + bypass, '--env', 'no_proxy=' + bypass];
+  return ['-a', app, '--env', 'NO_PROXY=' + bypass, '--env', 'no_proxy=' + bypass,
+    ...(home ? ['--env', 'CODEX_HOME=' + home] : [])];
 }
 
 // ---------------------------------------------------------------- macOS
@@ -54,7 +55,7 @@ async function findMacApp(options = {}) {
 }
 
 async function macAppRunning(executable) {
-  const { stdout } = await run('/bin/ps', ['-axo', 'pid=,comm=']);
+  const { stdout } = await run('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000 });
   return stdout.split('\n').some(line => line.trim().replace(/^\d+\s+/, '') === executable);
 }
 
@@ -68,7 +69,7 @@ async function macInheritedBypass() {
 }
 
 async function macLaunch(app, args) {
-  await run('/usr/bin/open', args);
+  await run('/usr/bin/open', args, { timeout: 10000 });
 }
 
 // -------------------------------------------------------------- Windows
@@ -253,7 +254,7 @@ async function findWinApp(options = {}) {
 
 async function winAppRunning(executable) {
   const name = path.basename(executable);
-  const { stdout } = await run('tasklist', ['/FI', `IMAGENAME eq ${name}`, '/FO', 'CSV', '/NH']);
+  const { stdout } = await run('tasklist', ['/FI', `IMAGENAME eq ${name}`, '/FO', 'CSV', '/NH'], { timeout: 5000, windowsHide: true });
   return stdout.toLowerCase().includes(`"${name.toLowerCase()}"`);
 }
 
@@ -271,15 +272,14 @@ async function winInheritedBypass(env = process.env) {
   return inherited;
 }
 
-function winLaunch(app, bypass) {
+function winLaunch(app, env) {
   // 直接以注入后的环境变量启动子进程，等价于 macOS 的 `open --env`，
   // 不需要修改系统或用户级环境变量。
-  const child = spawn(app.executable, [], {
-    detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, NO_PROXY: bypass, no_proxy: bypass },
+  return new Promise((resolve, reject) => {
+    const child = spawn(app.executable, [], { detached: true, stdio: 'ignore', env });
+    child.once('error', reject);
+    child.once('spawn', () => { child.unref(); resolve(); });
   });
-  child.unref();
 }
 
 // ----------------------------------------------------------------- main
@@ -326,39 +326,54 @@ function describeConfig(env = process.env, config = null) {
 
 async function launch(options = {}) {
   const env = options.env || process.env;
-  const argv = options.argv || process.argv.slice(2);
-  const platform = PLATFORMS[process.platform];
+  const argv = options.argv || [];
+  const platformName = options.platform || process.platform;
+  const platform = options.adapter || PLATFORMS[platformName];
   if (!platform) throw new Error('此启动入口仅支持 macOS 和 Windows。');
   if (argv.some(arg => arg !== '--check')) throw new Error('支持的参数：--check（仅检查，不启动）。');
   const check = argv.includes('--check');
-  const app = await platform.findApp({ env });
-  if (process.platform === 'win32') {
-    const explicit = resolveCodexPaths({ env }).appPath;
-    if (explicit && winAppUpdatePattern(explicit)) console.log(`已定位 WindowsApps 应用：${app.executable}`);
-  }
+  const context = await launchContext({ ...options, env });
+  const app = await platform.findApp({ env, config: options.config });
   const running = await platform.isRunning(app.executable);
-  if (running && !check) throw new Error(`Codex 正在运行。${platform.quitHint}，再运行此脚本。`);
-  const port = Number(env.RELAY_UI_PORT || 3790);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('RELAY_UI_PORT 无效。');
-  const status = await relayStatus(port);
-  if (!status.proxyInstalled || status.mode !== 'proxy') throw new Error('Codex 尚未接入本地代理，请先在管理页面接入。');
-  const url = new URL(status.proxyUrl);
-  if (url.hostname !== '127.0.0.1' || url.protocol !== 'http:') throw new Error('本地代理地址不符合此启动入口要求。');
+  if (running && !check) throw new Error(`Codex App 正在运行。${platform.quitHint}，再点击启动或运行启动脚本。`);
   const inherited = await platform.inheritedBypass(env);
-  const bypass = bypassList(env.NO_PROXY, env.no_proxy, ...inherited);
+  const bypass = bypassList(context.env.NO_PROXY, context.env.no_proxy, ...inherited);
+  const childEnv = { ...context.env, NO_PROXY: bypass, no_proxy: bypass };
   if (check) {
-    const config = describeConfig(env);
-    if (config) console.log(config);
-    console.log('检查通过：中转服务可用，Codex 已配置本地代理。');
-    console.log(running ? 'Codex 当前仍在运行；此检查不会改变现有进程环境。' : 'Codex 已退出，可以启动。');
-    console.log('启动时将为 Codex 设置 NO_PROXY / no_proxy，包含 127.0.0.1、localhost、::1。');
-    return;
+    return { message: `检查通过：中转服务可用，Codex 已配置本地代理。${running ? 'Codex 当前仍在运行；启动前请完全退出。' : 'Codex 已退出，可以启动。'}`, executable: app.executable, home: context.home };
   }
-  if (process.platform === 'darwin') await platform.launch(app, launchArguments(app.app, [env.NO_PROXY, env.no_proxy, ...inherited]));
-  else await platform.launch(app, bypass);
-  console.log('已请求启动 Codex，本机绕过规则随本次进程生效。');
-  console.log('中转服务继续负责上游网络；FlyingBird 和系统代理设置未修改。');
+  if (platformName === 'darwin') await platform.launch(app, launchArguments(app.app, [bypass], context.home));
+  else await platform.launch(app, childEnv);
+  return { message: '已请求启动 Codex App，本机绕过规则随本次进程生效。', executable: app.executable, home: context.home };
 }
 
-if (require.main === module) launch().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { bypassList, launchArguments, relayStatus, findWinApp, findUpdatedWinApp, findRegisteredWinApp, listRegisteredWinAppLocations, findMacApp, describeConfig, launch };
+// 以管理服务当前目录为准，避免页面检查的是 A 目录、启动却读 B 目录。
+async function launchContext({ env = process.env, status, getStatus = relayStatus } = {}) {
+  const port = Number(env.RELAY_UI_PORT || 3790);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('RELAY_UI_PORT 无效。');
+  const current = status || await getStatus(port);
+  if (!current.proxyInstalled || current.mode !== 'proxy') throw new Error('Codex 尚未接入本地代理，请先在管理页面接入。');
+  if (current.writeBlocked) throw new Error('存在未完成的配置写入，请先恢复配置后再启动。');
+  if (!current.selectedProxyName) throw new Error('请先选择一个中转站。');
+  const url = new URL(current.proxyUrl);
+  if (url.hostname !== '127.0.0.1' || url.protocol !== 'http:') throw new Error('本地代理地址不符合此启动入口要求。');
+  const home = expandPath(current.home, env);
+  if (!home) throw new Error('管理服务未返回 Codex 配置目录，请重启中转服务。');
+  const explicit = expandPath(env.CODEX_HOME, env);
+  const canonical = async value => {
+    const resolved = await fs.realpath(value).catch(() => path.resolve(value));
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  if (explicit && await canonical(explicit) !== await canonical(home)) throw new Error('CODEX_HOME 与管理页面的配置目录不同，请保持一致后再启动。');
+  const bypass = bypassList(env.NO_PROXY, env.no_proxy);
+  return { home, status: current, env: { ...env, CODEX_HOME: home, NO_PROXY: bypass, no_proxy: bypass } };
+}
+
+if (require.main === module) launch({ argv: process.argv.slice(2) }).then(result => {
+  const description = describeConfig();
+  if (description) console.log(description);
+  console.log(result.message);
+  console.log('应用：' + result.executable);
+  console.log('Codex 配置目录：' + result.home);
+}).catch(error => { console.error(error.message); process.exitCode = 1; });
+module.exports = { bypassList, launchArguments, relayStatus, launchContext, findWinApp, findUpdatedWinApp, findRegisteredWinApp, listRegisteredWinAppLocations, findMacApp, describeConfig, launch };

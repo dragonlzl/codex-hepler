@@ -199,3 +199,4 @@ footer{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
 @media(min-width:1400px){
   .route-list{gap:20px}
 }
+.launch-panel{padding:20px 24px;margin-bottom:24px;border:1px solid var(--line);border-radius:9px;background:white}.launch-heading{display:flex;align-items:center;justify-content:space-between;gap:20px}.launch-heading h2{font-size:15px;margin:0}.launch-panel p{font-size:12px;line-height:1.7;color:var(--muted);margin:8px 0 0;overflow-wrap:anywhere}.launch-panel .path-form{margin-top:16px}.launch-panel p.error{color:#a45439}.launch-panel p.success{color:var(--green)}#launch-feedback:empty{display:none}@media(max-width:760px){.launch-panel{padding:19px}.launch-heading{align-items:stretch;flex-direction:column;gap:12px}.launch-heading button{width:100%}}

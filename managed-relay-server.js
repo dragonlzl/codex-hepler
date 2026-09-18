@@ -10,6 +10,7 @@ const { Availability } = require('./managed-relay-runtime/availability');
 const { networkAccessError } = require('./managed-relay-runtime/network-error');
 const { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
 const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
+const { createLauncher } = require('./managed-relay-runtime/codex-launcher');
 
 const PUBLIC_DIR = path.join(__dirname, 'managed-relay-public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -62,6 +63,8 @@ async function start(options = {}) {
   let appPath = paths.appPath;
   let appPathSource = paths.appSource;
   const appPathLocked = paths.appSource === 'env';
+  const launcher = options.launcher || createLauncher();
+  let launchInFlight = false;
 
   const build = (target, injected) => {
     const store = new ConfigStore(target, 'http://127.0.0.1:' + proxyPort + '/v1');
@@ -101,6 +104,7 @@ async function start(options = {}) {
     return { ...current, home: homeSource === 'default' ? displayPath(holder.home) : path.resolve(holder.home),
       homeSource, homeLocked, settingsPath: displayPath(settingsFile),
       configPath: displayPath(paths.configFile), codexAppPath: appPath || null, appPathSource, appPathLocked,
+      launch: await launcher.snapshot(),
       lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, accountGroupingAvailable: true, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
@@ -155,6 +159,29 @@ async function start(options = {}) {
         if (req.headers.origin && req.headers.origin !== uiUrl) throw problem('跨站请求不允许。', 403);
         if (!String(req.headers['content-type']).startsWith('application/json')) throw problem('需要 JSON 请求。', 415);
         const payload = await body(req);
+        if (url.pathname === '/api/launch') {
+          // Process launch is restricted to this UI origin and a fixed action.
+          if (req.headers.origin !== uiUrl) throw problem('启动请求必须来自本地管理页面。', 403);
+          if (!payload || !['app', 'cli'].includes(payload.target) || Object.keys(payload).some(key => !['target', 'cwd'].includes(key)) ||
+              (payload.cwd !== undefined && (payload.target !== 'cli' || typeof payload.cwd !== 'string'))) throw problem('启动参数无效。', 400);
+          if (launchInFlight || savingPaths) throw problem('正在启动或保存设置，请稍候。', 409);
+          launchInFlight = true;
+          let result;
+          try {
+            const current = { ...await store.status(), home: path.resolve(holder.home) };
+            const env = { ...process.env, CODEX_HOME: current.home, RELAY_UI_PORT: String(ui.address().port) };
+            // Use the page's current path even if the JSON was changed externally.
+            if (appPath) env.CODEX_APP_PATH = appPath; else delete env.CODEX_APP_PATH;
+            const config = { ...loadCodexConfig(paths.configFile), codexAppPath: appPath || '' };
+            result = await launcher.start(payload.target, { status: current, env, config, cwd: payload.cwd });
+          } catch (error) { throw problem(error.message, 409); }
+          finally { launchInFlight = false; }
+          json(res, 200, { ...result, status: await status() });
+          return;
+        }
+        if (launchInFlight && ['/api/home', '/api/app-path', '/api/proxy/install', '/api/proxy/restore', '/api/select'].includes(url.pathname)) {
+          throw problem('正在启动 Codex，请稍后再修改连接配置。', 409);
+        }
         if (url.pathname.startsWith('/api/availability/browser-login/')) {
           const action = url.pathname.slice('/api/availability/browser-login/'.length);
           const result = action === 'start' ? await availability.startBrowserLogin(payload)

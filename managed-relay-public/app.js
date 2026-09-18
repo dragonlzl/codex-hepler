@@ -45,6 +45,10 @@ let homeDirty = false;
 const appPathForm = document.querySelector('#app-path-form');
 const appPathResult = document.querySelector('#app-path-result');
 let appPathDirty = false;
+let launchBusy = false;
+let cliCwdInitialized = false;
+const cliCwd = document.querySelector('#cli-cwd');
+const launchFeedback = document.querySelector('#launch-feedback');
 const availability = new RelayAvailability({
   list: routesPanel, select: document.querySelector('#availability-model'), getState: () => state, isDragging: () => Boolean(draggedName), onChange: applyAvailabilityFilter,
   mutateBalanceSource: async payload => {
@@ -249,7 +253,51 @@ function renderControls() {
   renderNetwork();
   renderHome();
   renderAppPath();
+  renderLaunch();
 }
+
+function renderLaunch() {
+  const launch = state.launch;
+  if (!cliCwdInitialized && launch?.defaultCwd) { cliCwd.value = launch.defaultCwd; cliCwdInitialized = true; }
+  const ready = loaded && launch?.available && state.proxyInstalled && !state.writeBlocked && state.selectedProxyName;
+  document.querySelectorAll('[data-launch]').forEach(button => {
+    button.disabled = !ready || busy || networkBusy || launchBusy || launch?.busy ||
+      (button.dataset.launch === 'cli' && ['pending', 'running'].includes(launch?.cli?.state));
+    button.setAttribute('aria-busy', String(launchBusy));
+  });
+  cliCwd.disabled = busy || launchBusy;
+  const status = document.querySelector('#launch-status');
+  status.textContent = !loaded ? '无法连接管理服务，请确认服务仍在运行。'
+    : !launch ? '启动功能需要重启中转服务后生效。'
+      : !launch.available ? '页面启动支持 macOS 和 Windows。'
+        : !state.proxyInstalled ? '请先在「运行与连接」中接入本地代理。'
+          : state.writeBlocked ? '请先处理未完成的配置写入。'
+            : !state.selectedProxyName ? '请先选择一个中转站。'
+              : launch.cli?.state === 'pending' ? '正在等待终端中的 CLI 启动…'
+                : launch.cli?.state === 'running' ? '本工具启动的 CLI 正在运行，请使用已有终端。'
+                  : '已接入本地代理，可以启动。';
+  if (!launchBusy && launch?.cli?.state === 'failed') status.textContent = launch.cli.message;
+  if (!launchBusy && ready && launch?.cli?.state === 'exited') status.textContent = 'CLI 已退出，可以再次启动。';
+}
+
+async function startClient(target) {
+  if (busy || launchBusy) return;
+  busy = true; launchBusy = true; mutationVersion++;
+  launchFeedback.className = '';
+  launchFeedback.textContent = target === 'app' ? '正在检查 App 并请求启动…' : '正在打开终端…';
+  renderControls();
+  try {
+    const result = await api('/api/launch', { target, ...(target === 'cli' ? { cwd: cliCwd.value } : {}) });
+    Object.assign(state, result.status);
+    launchFeedback.textContent = result.message;
+    launchFeedback.className = 'success';
+    render();
+  } catch (error) { launchFeedback.textContent = errorMessage(error); launchFeedback.className = 'error'; }
+  finally { busy = false; launchBusy = false; renderControls(); }
+}
+
+document.querySelector('#launch-app').addEventListener('click', () => startClient('app'));
+document.querySelector('#launch-cli-form').addEventListener('submit', event => { event.preventDefault(); startClient('cli'); });
 
 function showFeedback(phase, message) {
   feedback = { phase, message };
@@ -331,7 +379,7 @@ function render() {
 async function api(endpoint, payload) {
   const response = await fetch(endpoint, {
     ...(payload === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(endpoint === '/api/launch' ? 60000 : 15000),
   });
   const data = await response.json().catch(() => { throw new Error('服务返回异常，操作结果尚未确认，请刷新检查。'); });
   if (!response.ok) throw new Error(data.error || '操作失败。');

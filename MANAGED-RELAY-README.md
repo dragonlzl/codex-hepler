@@ -63,6 +63,19 @@ Windows 接受 `/` 作为路径分隔符，推荐上述写法，包含空格也�
 - 文件损坏或字段类型不对时会静默回退到自动探测，不会让服务起不来。
 - **仓库里只提交 `codex-relay.config.example.json`**，本机的 `codex-relay.config.json` 已在 `.gitignore` 中忽略，避免把本机用户名和路径带进版本库。
 
+## 页面启动 App / CLI
+
+「中转站」页面提供两个启动按钮，必须已接入本地代理且已选中转：
+
+- App 已运行时返回明确提示，要求用户完全退出；未运行时复用 App 启动器。
+- CLI 自动打开独立终端，使用页面填写的工作目录、当前 Codex 配置目录和本机绕过规则。macOS 优先使用 iTerm，未安装或调用失败时使用 Terminal；Windows 优先 Windows Terminal，回退 PowerShell。
+- 本次服务由页面启动的 CLI 会话运行或等待打开时禁止重复开窗；其他终端的 CLI 不受影响。重启管理服务不接管旧会话。
+- 独立 App 与 CLI 脚本在 macOS、Windows 均保留。详见 [CODEX-LOCAL-NETWORK.md](CODEX-LOCAL-NETWORK.md)。
+
+新增可选 JSON 字段 `codexCliPath` 用于指定 CLI 可执行文件。环境变量 `CODEX_CLI_PATH` 优先；未配置时查找 PATH 和常用安装目录。CLI 工作目录默认用户主目录，可在页面输入项目目录，不改变 Codex 配置目录。
+
+启动 API 为 `POST /api/launch`，只接受 `target: "app" | "cli"`，CLI 可额外传 `cwd`。接口要求管理页面的同源 Origin 和 JSON 请求，不接受任意命令、脚本、参数或可执行路径。启动期间会阻止冲突的目录与连接修改。临时终端启动文件只授予本机用户访问权限，启动后不可重复使用。
+
 ## 接入和恢复
 
 1. 页面选择“本地代理”，再选择中转站。这一步只准备路由，不修改 Codex 的地址。

@@ -1,5 +1,6 @@
 {
   "$comment": "本文件可复制为同目录下的 codex-relay.config.json 后按需修改。字段可全部省略，省略时按平台自动探测。Windows 的 codexAppPath 可填 ChatGPT.exe、Codex.exe 的完整路径或它所在目录；填写目录时优先 ChatGPT.exe，找不到再使用 Codex.exe。WindowsApps 中 OpenAI.Codex 更新使旧路径失效时，会自动按包目录特征查找唯一可用的新版，无需修改原配置或填写通配符。Windows 路径推荐使用正斜杠（如 C:/Program Files/Codex/app），或将每个反斜杠写成两个。本工具兼容路径字段中常见的单反斜杠粘贴写法，但其他 JSON 工具仍可能报错。",
   "codexAppPath": "",
-  "codexHome": ""
+  "codexHome": "",
+  "codexCliPath": ""
 }

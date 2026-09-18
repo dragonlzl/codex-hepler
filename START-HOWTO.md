@@ -1,13 +1,14 @@
 # Codex 中转工具启动与使用
 
-项目里有两个脚本，职责不同：
+项目提供三组脚本，职责不同：
 
 | 脚本 | 作用 | 什么时候运行 |
 | --- | --- | --- |
 | `start-managed-relay.sh`（macOS）<br>`start-managed-relay.cmd`（Windows） | 启动管理页面和本地转发服务 | 每次使用中转工具前先运行，终端保持打开 |
 | `start-codex-local.sh`（macOS）<br>`start-codex-local.cmd`（Windows） | 启动带本机代理绕过规则的 Codex | Codex 已接入本地代理后，首次接入或重新启动 Codex 时运行 |
+| `start-codex-cli.sh`（macOS）<br>`start-codex-cli.cmd`（Windows） | 在当前终端启动 Codex CLI | 进入目标项目目录后运行，支持 `--check` |
 
-两者依赖不同：管理服务首次运行会自动安装 npm 依赖；Codex 启动入口只用 Node 内置模块，不需要任何 npm 包。都要求 Node.js 22.13 或更高版本。详见 [CODEX-LOCAL-NETWORK.md](CODEX-LOCAL-NETWORK.md)。下文示例命令若写作 `.sh`，Windows 上请换用同名 `.cmd`。
+各入口依赖不同：管理服务首次运行会自动安装 npm 依赖；Codex 启动入口只用 Node 内置模块，不需要任何 npm 包。都要求 Node.js 22.13 或更高版本。详见 [CODEX-LOCAL-NETWORK.md](CODEX-LOCAL-NETWORK.md)。下文示例命令若写作 `.sh`，Windows 上请换用同名 `.cmd`。
 
 管理页面地址：<http://127.0.0.1:3790>
 
@@ -25,6 +26,17 @@
 列表每行右侧的图钉按钮用于“置顶”，再次点击可“取消置顶”。置顶项集中显示在顶部，多个置顶项之间、未置顶项之间均可拖拽排序；跨组移动使用图钉按钮。仅置顶再取消不会改变原排序位置；组内拖拽则更新相应组的排序。置顶和排序自动保存，刷新、换站及重新接入代理后保留，不会切换当前中转或修改密钥配置。
 
 本地代理模式下，推荐先完成第 1、2 步，再设置上游网络和中转站。直连模式下，先完成第 1 步，再按第 3、4 步选择中转；写入直连配置后重启 Codex。
+
+## 从页面启动 App 或 CLI
+
+完成本地代理接入后，回到「中转站」页面：
+
+- 点击「启动 Codex App」：已运行时提示先完全退出，未运行时带本机绕过规则启动。
+- 填写「CLI 工作目录」，点击「启动 Codex CLI」：macOS 优先自动打开 iTerm，未安装或调用失败时使用 Terminal；Windows 优先打开 Windows Terminal，不可用时打开 PowerShell。无需手动打开终端。
+- 启动请求发出后，页面继续检查 CLI 会话状态。CLI 在新终端中交互，页面继续用于换站。
+- 本次管理服务通过页面启动的 CLI 未退出时，按钮会防止重复开窗；独立脚本或其它终端启动的 CLI 不受此检测约束。管理服务重启后不接管旧终端。
+
+CLI 尚未安装或不在管理服务的 PATH 中时，先安装 CLI，或设置 `CODEX_CLI_PATH` / JSON 配置中的 `codexCliPath` 为可执行文件完整路径。Windows 支持 `codex.exe` 和 npm 安装的 `codex.cmd`。环境变量改变后需重启管理服务。CLI 工作目录与 Codex 配置目录是两个独立设置。
 
 ## 编辑已保存的中转
 

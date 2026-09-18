@@ -30,7 +30,7 @@ function configPath(env = process.env, platform = process.platform) {
 // 容错只作用于顶层路径字段。推荐仍用 / 或 JSON 标准的 \\，避免歧义。
 
 // 配置文件里只认路径字段，修复范围仅限这些字段的值。
-const FIELD_NAMES = ['codexAppPath', 'codex_app_path', 'codexHome', 'codex_home'];
+const FIELD_NAMES = ['codexAppPath', 'codex_app_path', 'codexHome', 'codex_home', 'codexCliPath'];
 
 function stringEnd(text, start, allowTrailingSlash = false) {
   for (let index = start + 1; index < text.length; index += 1) {
@@ -126,12 +126,14 @@ function readCodexConfig(file = configPath()) {
   if (!raw) return { config: {}, file, present: true };
   const appPath = text(raw.codexAppPath) || text(raw.codex_app_path);
   const home = text(raw.codexHome) || text(raw.codex_home);
+  const cliPath = text(raw.codexCliPath);
   return {
     file,
     present: true,
     config: {
       ...(appPath ? { codexAppPath: appPath } : {}),
       ...(home ? { codexHome: home } : {}),
+      ...(cliPath ? { codexCliPath: cliPath } : {}),
     },
   };
 }

@@ -6,18 +6,21 @@
 
 ## 启动
 
-项目包含三个脚本，前两个读写同一个 `key_config.json`：
+项目提供以下入口，管理服务与基础配置页面读写同一个 `key_config.json`：
 
 | 脚本 | macOS | Windows | 作用 |
 | --- | --- | --- | --- |
 | 管理服务（推荐） | `sh start-managed-relay.sh` | `start-managed-relay.cmd` | 管理页面（3790）+ 本地转发代理（3211），可接入／恢复 Codex 配置 |
 | 配置页面（基础版） | `npm start` | `npm start` | 只管理中转站列表，页面在 3789，不启动代理 |
-| Codex 启动入口 | `sh start-codex-local.sh` | `start-codex-local.cmd` | 给 Codex 进程注入本机代理绕过规则，仅接入本地代理后需要 |
+| Codex App 启动入口 | `sh start-codex-local.sh` | `start-codex-local.cmd` | 给 Codex 进程注入本机代理绕过规则，仅接入本地代理后需要 |
+| Codex CLI 启动入口 | `sh start-codex-cli.sh` | `start-codex-cli.cmd` | 在当前终端启动 CLI，使用管理页面的配置目录及本机绕过规则 |
+
+中转站页面提供「启动 Codex App」「启动 Codex CLI」按钮。CLI 会自动打开独立终端，可填写项目工作目录；App 已运行时提示先退出。两个按钮都要求先接入本地代理。首次更新此功能后需重启管理服务。
 
 **依赖**：都需要 Node.js 22.13 或更高版本，从 <https://nodejs.org> 安装 LTS 版。
 
 - `start-managed-relay.*` 需要 npm 依赖，首次运行会自动执行 `npm ci`。
-- `start-codex-local.*` 只用 Node 内置模块，**不需要任何 npm 包**。
+- `start-codex-local.*` 与 `start-codex-cli.*` 只用 Node 内置模块，**不需要任何 npm 包**。
 - `npm start`（基础版）无第三方依赖。
 
 管理服务的行为见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md)，Codex 启动入口见 [CODEX-LOCAL-NETWORK.md](CODEX-LOCAL-NETWORK.md)，故障排查见 [START-HOWTO.md](START-HOWTO.md)。

@@ -94,27 +94,35 @@ Windows 上会先按以下目录顺序查找 `ChatGPT.exe`，全部找不到再�
 
 ### 如果你用的是 Codex CLI
 
-本入口是为**桌面应用**准备的。Codex CLI 不需要它——在启动 `codex` 的同一个终端里设置环境变量即可，子进程会自动继承：
+CLI 有独立启动脚本，可在目标项目目录中运行（脚本用完整路径调用也会保留当前工作目录）：
 
-PowerShell：
-
-```powershell
-$env:NO_PROXY = "127.0.0.1,localhost,::1"
-codex
+```sh
+sh start-codex-cli.sh            # macOS，在当前终端运行
+sh start-codex-cli.sh --check    # 仅检查，不运行 CLI
 ```
-
-CMD：
 
 ```bat
-set NO_PROXY=127.0.0.1,localhost,::1
-codex
+start-codex-cli.cmd
+start-codex-cli.cmd --check
 ```
+
+两端都会检查管理服务与代理接入，注入 `NO_PROXY` / `no_proxy`，并把管理页面当前的配置目录作为 `CODEX_HOME`。如果启动终端显式设置了不同的 `CODEX_HOME`，会提示先保持一致。CLI 参数可通过脚本继续传入，例如 `-- resume`；本工具的 `--check` 仅检查启动条件。
+
+CLI 路径按 `CODEX_CLI_PATH` > JSON 配置 `codexCliPath` > PATH 与常用安装目录查找。Windows 接受 `codex.exe` 或 `codex.cmd` 完整路径，macOS 接受可执行的 `codex` 文件。无需配置桌面 App 路径。CLI 本身需要事先安装。
+
+### 页面启动
+
+在「中转站」页面点击「启动 Codex App」或「启动 Codex CLI」。App 复用上述入口逻辑；如果已经运行，页面提示先完全退出，不会结束已有会话。CLI 按钮在 macOS 上优先自动打开 iTerm，未安装或调用失败时使用 Terminal；Windows 使用 Windows Terminal，不可用时回退 PowerShell。CLI 在填写的工作目录中运行，独立 CLI 脚本则使用当前终端。
+
+macOS 检查常见安装目录与 Spotlight 中的 iTerm；使用 AppleScript 创建新窗口运行 CLI，不向已有会话输入命令。首次可能出现系统自动化授权提示；拒绝或调用失败时回退 Terminal。Terminal 通过打开临时 `.command` 文件启动，不需要 AppleScript 控制。页面显示「已请求打开终端」只表示系统已接受启动请求，随后显示 CLI 的运行或失败状态。本次管理服务只跟踪由页面启动的 CLI；不会扫描或终止用户在其它终端开启的 CLI。已有页面 CLI 会话未退出时不重复开窗。管理服务重启后不接管旧终端。
+
+页面和脚本使用同一启动逻辑，仅影响新进程的环境，不写系统代理或系统环境变量。管理服务必须保持运行；关闭 CLI 不会关闭管理服务。用非默认管理端口执行独立脚本时设置 `RELAY_UI_PORT`，页面按钮自动使用实际端口。
 
 ## 依赖
 
 **只需要 Node.js 22.13 或更高版本，不需要安装任何 npm 包。**
 
-本入口直接运行 `managed-relay-runtime/codex-launch.js`，它只使用 Node 内置模块（`node:fs`、`node:path`、`node:http`、`node:child_process`、`node:util`），读取 JSON 配置文件用的 `codex-config.js` 同样只用内置模块，**不依赖 `node_modules`**。所以即使从未执行过 `npm ci`，这个入口也能正常工作。
+App 与 CLI 启动入口只使用 Node 内置模块，**不依赖 `node_modules`**。即使从未执行过 `npm ci`，两个启动入口也能正常工作。
 
 安装 Node.js：从 <https://nodejs.org> 下载 LTS 安装包。装完**新开一个终端**（PATH 只在新窗口生效），确认：
 

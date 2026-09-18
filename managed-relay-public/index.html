@@ -27,6 +27,13 @@
           <section id="page-routes" class="page" aria-labelledby="routes-title">
             <div class="page-heading"><div><p class="kicker">YOUR RELAY WORKSPACE</p><h1 id="routes-title">中转站</h1><p>管理线路、查看状态，找到合适的请求入口。</p></div><button id="add-open" class="primary" type="button"><span aria-hidden="true">＋</span> 新增中转</button></div>
             <section id="current-route" class="current-route" aria-label="当前使用"><span class="current-dot" aria-hidden="true"></span><span class="current-route-label">当前使用</span><button id="current-route-name" type="button" disabled>正在读取…</button><span id="current-route-mode" class="mode-tag"></span><a href="#connection" class="text-link">连接设置 ↗</a></section>
+            <section class="launch-panel" aria-labelledby="launch-title">
+              <div class="launch-heading"><div><h2 id="launch-title">启动 Codex</h2><p>接入本地代理后，从这里打开 App 或 CLI，后续换站无需重启。</p></div><button id="launch-app" class="secondary" type="button" data-launch="app" disabled>启动 Codex App</button></div>
+              <form id="launch-cli-form" class="path-form"><label>CLI 工作目录<input id="cli-cwd" type="text" autocomplete="off" spellcheck="false" placeholder="填写要使用的项目目录" required /></label><button id="launch-cli" class="secondary" type="submit" data-launch="cli" disabled>启动 Codex CLI</button></form>
+              <p class="launch-help">CLI 自动打开独立终端；macOS 优先使用 iTerm，未安装时使用 Terminal。App 已运行时会提示先退出。</p>
+              <p id="launch-status" role="status" aria-live="polite">正在检查启动条件…</p>
+              <p id="launch-feedback" role="status" aria-live="polite"></p>
+            </section>
             <section id="routes-panel" aria-labelledby="list-title">
               <div class="list-toolbar"><div class="list-heading"><h2 id="list-title">中转列表</h2><span id="count" class="count">—</span></div><div class="list-filters"><label class="search-box"><span aria-hidden="true">⌕</span><input id="route-search" type="search" aria-label="搜索名称或地址" placeholder="搜索名称或地址" autocomplete="off" /></label><label class="model-filter">模型<select id="availability-model" disabled><option value="gpt-6-astra">gpt-6-astra</option><option value="gpt-5.6-sol">gpt-5.6-sol</option></select></label></div></div>
               <div class="list-help"><span>按中转商归组 · 拖动手柄排序</span><span>状态每 15 秒更新</span></div>
