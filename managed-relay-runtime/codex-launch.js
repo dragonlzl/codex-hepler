@@ -86,6 +86,7 @@ const WIN_APP_DIRECTORIES = [
   ['LOCALAPPDATA', 'Codex'],
   ['PROGRAMFILES', 'Codex'],
 ];
+const WIN_APPX_PACKAGE_NAME = 'OpenAI.Codex';
 
 // 只替换 WindowsApps 中 OpenAI.Codex 的包目录，不递归扫描磁盘。
 // 同时兼容 OpenAI.Codex_<版本>_x64__<发布者>\app 和分层的
@@ -104,7 +105,7 @@ function winAppUpdatePattern(explicit) {
   if (segments[index]?.toLowerCase() === 'openai.codex') {
     index += 1;
     prefix = '_';
-  } else if (index !== segments.length - 2) return null;
+  }
   if (!segments[index]?.toLowerCase().startsWith(prefix.toLowerCase()) || segments[index].length <= prefix.length) return null;
   return {
     parent: segments.slice(0, index).join('\\'),
@@ -114,9 +115,79 @@ function winAppUpdatePattern(explicit) {
   };
 }
 
-async function findUpdatedWinApp(explicit, { access = fs.access, stat = fs.stat, readdir = fs.readdir } = {}) {
+function normalizeWinPath(value) {
+  return path.win32.normalize(value).replace(/\\+$/, '');
+}
+
+function registeredPackageCandidates(pattern, location) {
+  const install = normalizeWinPath(location);
+  const suffix = pattern.suffix;
+  const basename = path.win32.basename(install).toLowerCase();
+  if (basename !== 'app' && !basename.startsWith(pattern.prefix) && !basename.startsWith('_') && !basename.startsWith('openai.codex_')) return [];
+  const candidates = [];
+  if (basename === 'app') candidates.push(install);
+  else if (basename.startsWith('_') && suffix.length) candidates.push(path.win32.join(install, ...suffix));
+  // Get-AppxPackage normally reports the package root. Some OpenAI.Codex builds
+  // report the app directory instead, so support both layouts without listing
+  // WindowsApps itself. The registered package name is the identity check.
+  candidates.push(path.win32.join(install, 'app'));
+  if (suffix.length) candidates.push(path.win32.join(install, ...suffix));
+  candidates.push(install);
+  return [...new Set(candidates.flatMap(candidate => pattern.names.map(name => path.win32.join(candidate, name))))];
+}
+
+async function listRegisteredWinAppLocations({ platform = process.platform, runCommand = run } = {}) {
+  if (platform !== 'win32') return [];
+  const command = `$ErrorActionPreference='Stop'; Get-AppxPackage -Name '${WIN_APPX_PACKAGE_NAME}' | ForEach-Object { $_.InstallLocation }`;
+  const { stdout } = await runCommand('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command,
+  ], { timeout: 5000, windowsHide: true });
+  return [...new Set(stdout.split(/\r?\n/).map(value => value.trim()).filter(Boolean))];
+}
+
+async function findRegisteredWinApp(explicit, { platform = process.platform, env = process.env, access = fs.access, stat = fs.stat, packageLocations, runCommand = run } = {}) {
   const pattern = winAppUpdatePattern(explicit);
   if (!pattern) return null;
+  let locations;
+  try {
+    locations = packageLocations === undefined
+      ? await listRegisteredWinAppLocations({ platform, runCommand })
+      : typeof packageLocations === 'function' ? await packageLocations({ env, explicit, pattern }) : packageLocations;
+  } catch {
+    return null;
+  }
+  const matches = [];
+  for (const location of locations || []) {
+    for (const executable of registeredPackageCandidates(pattern, location)) {
+      try {
+        const info = await stat(executable);
+        if (!info.isFile()) continue;
+        await access(executable);
+        matches.push({ app: executable, executable });
+        break;
+      } catch (error) {
+        // WindowsApps may deny metadata access even though the registered package can be launched.
+        // Trust the package registration for this specific EACCES/EPERM case.
+        if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
+          matches.push({ app: executable, executable });
+          break;
+        }
+      }
+    }
+  }
+  const unique = [...new Map(matches.map(match => [match.executable.toLowerCase(), match])).values()];
+  if (unique.length > 1) {
+    const candidates = unique.map(match => match.executable).sort().join('\n');
+    throw new Error(`原应用路径已失效，但找到多个已注册的 WindowsApps 安装目录，请选择一个并更新应用路径：\n${candidates}`);
+  }
+  return unique[0] || null;
+}
+
+async function findUpdatedWinApp(explicit, { platform = process.platform, env = process.env, access = fs.access, stat = fs.stat, readdir = fs.readdir, packageLocations, runCommand = run } = {}) {
+  const pattern = winAppUpdatePattern(explicit);
+  if (!pattern) return null;
+  const registered = await findRegisteredWinApp(explicit, { platform, env, access, stat, packageLocations, runCommand });
+  if (registered) return registered;
   let entries;
   try { entries = await readdir(pattern.parent, { withFileTypes: true }); }
   catch (error) {
@@ -144,7 +215,7 @@ async function findUpdatedWinApp(explicit, { access = fs.access, stat = fs.stat,
 }
 
 async function findWinApp(options = {}) {
-  const { env = process.env, config = null, access = fs.access, stat = fs.stat, readdir = fs.readdir } = options;
+  const { env = process.env, config = null, platform = process.platform, access = fs.access, stat = fs.stat, readdir = fs.readdir, packageLocations, runCommand = run } = options;
   const fileConfig = config !== null ? config : loadCodexConfig(configPath(env));
   const explicit = resolveCodexPaths({ env, config: fileConfig }).appPath;
   if (explicit) {
@@ -159,9 +230,9 @@ async function findWinApp(options = {}) {
         try { await access(executable); return { app: executable, executable }; } catch { /* Try the other executable name. */ }
       }
     } catch { /* Explain an unavailable explicit path below. */ }
-    const updated = await findUpdatedWinApp(explicit, { access, stat, readdir });
+    const updated = await findUpdatedWinApp(explicit, { platform, env, access, stat, readdir, packageLocations, runCommand });
     if (updated) return updated;
-    const updateHint = winAppUpdatePattern(explicit) ? '已按 WindowsApps 安装包目录特征查找，未找到可用的替代版本。' : '';
+    const updateHint = winAppUpdatePattern(explicit) ? '已按 WindowsApps 安装包目录特征及系统已注册应用查找，未找到可用的替代版本。' : '';
     throw new Error(`指定的 Codex 应用不可用：${explicit}。${updateHint}请确认路径存在，指向 ChatGPT.exe、Codex.exe 或包含其中之一的目录（检查 ${source}）。`);
   }
   // 先在所有候选目录找 ChatGPT.exe，再回退 Codex.exe，避免旧安装抢先命中。
@@ -290,4 +361,4 @@ async function launch(options = {}) {
 }
 
 if (require.main === module) launch().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { bypassList, launchArguments, relayStatus, findWinApp, findUpdatedWinApp, findMacApp, describeConfig, launch };
+module.exports = { bypassList, launchArguments, relayStatus, findWinApp, findUpdatedWinApp, findRegisteredWinApp, listRegisteredWinAppLocations, findMacApp, describeConfig, launch };

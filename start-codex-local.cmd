@@ -5,6 +5,6 @@ chcp 65001 >nul 2>nul
 setlocal
 node "%~dp0managed-relay-runtime\codex-launch.js" %*
 
-rem 启动失败时停住窗口，避免“未找到 Codex 桌面应用”等提示一闪而过。
-rem 自动化调用可先设置 RELAY_NO_PAUSE=1 跳过。
+rem Keep the window open after an error so the message can be read.
+rem Set RELAY_NO_PAUSE=1 for automated calls to skip the pause.
 if not defined RELAY_NO_PAUSE pause

@@ -85,6 +85,7 @@ test('an unavailable explicit directory reports both names instead of launching 
     access: async target => { checked.push(target); throw new Error('ENOENT'); },
     stat: async () => ({ isDirectory: () => true }),
     readdir: async () => [],
+    packageLocations: [],
   }), error => /Codex\.exe/.test(error.message) && /ChatGPT\.exe/.test(error.message) && /codexAppPath/.test(error.message));
   assert.deepEqual(checked, [path.win32.join(WINDOWS_APPS_DIR, 'ChatGPT.exe'), path.win32.join(WINDOWS_APPS_DIR, 'Codex.exe')]);
 });
@@ -175,6 +176,6 @@ for (const name of ['start-managed-relay.cmd', 'start-codex-local.cmd']) {
     assert.equal(/[^\x00-\x7F]/.test(head), false,
       'chcp 之前的行仍按旧代码页解码，必须是纯 ASCII，否则可能出现多余字符甚至被当成命令分隔符');
     const tail = text.slice(text.indexOf('chcp 65001'));
-    assert.match(tail, /[\u4e00-\u9fa5]/, 'chcp 之后的中文提示应保持 UTF-8，才能正常显示');
+    assert.equal(/[^\x00-\x7F]/.test(tail), false, '批处理文件保持 ASCII，避免 cmd 读取编码不一致时把中文行当成命令');
   });
 }

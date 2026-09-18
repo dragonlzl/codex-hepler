@@ -56,6 +56,7 @@ Windows 接受 `/` 作为路径分隔符，推荐上述写法，包含空格也�
 - 两个字段都可以省略，文件也可以完全不存在。也支持 `codex_app_path` / `codex_home` 这种下划线写法，值里的 `~` 和 `%LOCALAPPDATA%` 会自动展开。
 - Windows 填写目录时优先 `ChatGPT.exe`，找不到再使用 `Codex.exe`。自动探测时也先在所有候选目录查找 `ChatGPT.exe`，再回退 `Codex.exe`。填写完整文件路径时保留指定的文件名，包括 WindowsApps 安装目录里的 `app/ChatGPT.exe`。
 - **WindowsApps 更新后自动查找**：原路径仍可用时优先使用原路径；失效后，在同一 WindowsApps 安装位置查找 `OpenAI.Codex_*` 包中的 `app` 目录，也兼容 `OpenAI.Codex\_<版本>\_x64\_\_<发布者>\app` 分层形式（保留版本之后的目录结构）。只使用包含可访问可执行文件的唯一结果；多个可用结果会列出路径并提示重新选择，未找到或无法读取安装目录时会说明原因。配置文件和 `CODEX_APP_PATH` 都支持，无需填写通配符，也不会自动改写已保存的路径。
+- WindowsApps 通常禁止普通程序枚举目录；旧路径失效时，启动器会先通过 Windows 的 `Get-AppxPackage -Name OpenAI.Codex` 查询已注册安装位置，再按路径特征定位新版，因此不要求直接读取 `C:\Program Files\WindowsApps`。
 - 查找顺序：`CODEX_TOOL_CONFIG` 指定的路径 > 项目根目录 > `~/.config/codex-relay-ui/`（Windows 为 `%APPDATA%\codex-relay-ui\`）。
 - 优先级：`CODEX_APP_PATH` / `CODEX_HOME` 环境变量仍然高于配置文件，方便临时覆盖。
 - `codexHome` 生效时页面展示完整目录，并提示「来自 JSON 配置文件，保存会更新该文件」；可直接在页面修改并保存。

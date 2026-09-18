@@ -75,7 +75,7 @@ start-codex-local.cmd --check        # Windows
 
 **WindowsApps 更新无需重填路径**：继续保存某次安装的完整目录即可。启动时先检查原路径；原路径失效后，会在同一安装位置按包名特征查找新版。例如 `C:/Program Files/WindowsApps/OpenAI.Codex_26.908.9136.0_x64__2p2nqsd0c76g0/app` 会匹配同一 WindowsApps 目录下的 `OpenAI.Codex_*/app`。也兼容 `C:/Program Files/WindowsApps/OpenAI.Codex/_26.908.9136.0/_x64/_/_2p2nqsd0c76g0/app` 这种分层路径，只替换版本目录，其余层级保持一致。
 
-只有找到唯一可用安装才会启动；填写目录时优先 `ChatGPT.exe`，填写完整文件路径时保留该文件名。多个安装同时可用时会列出候选并提示选择；没有匹配或安装目录不可读时会给出错误提示。此规则同时适用于 JSON 配置和 `CODEX_APP_PATH`，不会改写原配置，连续更新后仍可复用。启动和 `--check` 会打印实际定位到的应用路径。
+只有找到唯一可用安装才会启动；填写目录时优先 `ChatGPT.exe`，填写完整文件路径时保留该文件名。WindowsApps 通常禁止普通程序枚举目录，因此启动器会先通过 Windows 的 `Get-AppxPackage -Name OpenAI.Codex` 查询已注册安装位置，再按路径特征定位文件；只有查询不到时才尝试直接读取目录。多个安装同时可用时会列出候选并提示选择；没有匹配或安装目录不可读时会给出错误提示。此规则同时适用于 JSON 配置和 `CODEX_APP_PATH`，不会改写原配置，连续更新后仍可复用。启动和 `--check` 会打印实际定位到的应用路径。
 
 同目录的 `codex-relay.config.example.json` 是模板；本机的 `codex-relay.config.json` 不会进版本库。字段说明见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md#项目配置文件-codex-relayconfigjson)。
 

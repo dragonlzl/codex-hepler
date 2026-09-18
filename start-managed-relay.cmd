@@ -12,16 +12,16 @@ if not exist "%RUNTIME%\node_modules\proxy-from-env" goto install
 goto run
 
 :install
-echo 首次运行：正在安装中转服务依赖...
+echo First run: installing relay dependencies...
 call npm ci --prefix "%RUNTIME%" --ignore-scripts --no-audit --no-fund
 if errorlevel 1 (
-  echo 依赖安装失败，请确认已安装 Node.js 22.13 或更高版本且 npm 可用。
+  echo Dependency installation failed. Check that Node.js 22.13+ and npm are available.
   goto :eof
 )
 
 :run
 node "%ROOT%managed-relay-server.js" %*
 
-rem 服务退出（含启动报错）后停住窗口，避免报错一闪而过。
-rem 自动化调用可先设置 RELAY_NO_PAUSE=1 跳过。
+rem Keep the window open after the service exits so errors can be read.
+rem Set RELAY_NO_PAUSE=1 for automated calls to skip the pause.
 if not defined RELAY_NO_PAUSE pause

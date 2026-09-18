@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { findWinApp } = require('../codex-launch');
+const { findWinApp, listRegisteredWinAppLocations } = require('../codex-launch');
 const { resolveAppPath, writeConfigAppPath } = require('../settings');
 
 const WINDOWS_APPS = String.raw`C:\Program Files\WindowsApps`;
@@ -33,7 +33,7 @@ async function installation(t) {
     await fs.mkdir(local(directory), { recursive: true });
     for (const name of names) await fs.writeFile(local(path.win32.join(directory, name)), 'fixture');
   };
-  const find = target => findWinApp({ env: {}, config: { codexAppPath: target }, ...io });
+  const find = target => findWinApp({ env: {}, config: { codexAppPath: target }, packageLocations: [], ...io });
   return { root, local, scans, io, add, find };
 }
 
@@ -45,6 +45,52 @@ for (const [label, appDirectory] of [['flat package', flatApp], ['supplied split
     const expected = path.win32.join(appDirectory(OLD), 'ChatGPT.exe');
     assert.deepEqual(await fixture.find(appDirectory(OLD)), { app: expected, executable: expected });
     assert.deepEqual(fixture.scans, []);
+  });
+
+  test(`${label}: registered package locations work when WindowsApps itself cannot be listed`, async t => {
+    const fixture = await installation(t);
+    await fixture.add(appDirectory(NEW));
+    const location = label === 'flat package'
+      ? path.win32.dirname(appDirectory(NEW))
+      : path.win32.join(WINDOWS_APPS, 'OpenAI.Codex', `_${NEW}`);
+    const target = appDirectory(OLD);
+    const app = await findWinApp({
+      env: {}, config: { codexAppPath: target }, packageLocations: [location], ...fixture.io,
+      readdir: async () => { throw Object.assign(new Error('access denied'), { code: 'EACCES' }); },
+    });
+    assert.equal(app.executable, path.win32.join(appDirectory(NEW), 'ChatGPT.exe'));
+  });
+
+  test(`${label}: Windows package registration is queried before the protected directory`, async t => {
+    const fixture = await installation(t);
+    await fixture.add(appDirectory(NEW));
+    const location = label === 'flat package'
+      ? path.win32.dirname(appDirectory(NEW))
+      : path.win32.join(WINDOWS_APPS, 'OpenAI.Codex', `_${NEW}`);
+    let command;
+    const app = await findWinApp({
+      platform: 'win32', env: {}, config: { codexAppPath: appDirectory(OLD) }, ...fixture.io,
+      readdir: async () => { throw Object.assign(new Error('access denied'), { code: 'EACCES' }); },
+      runCommand: async (...args) => { command = args; return { stdout: `${location}\r\n` }; },
+    });
+    assert.equal(app.executable, path.win32.join(appDirectory(NEW), 'ChatGPT.exe'));
+    assert.equal(command[0], 'powershell.exe');
+    assert.ok(command[1].includes('-Command'));
+    assert.match(command[1][command[1].indexOf('-Command') + 1], /Get-AppxPackage/);
+  });
+
+  test(`${label}: a registered flat package root also resolves a split configured path`, async t => {
+    if (label !== 'supplied split path') return;
+    const fixture = await installation(t);
+    await fixture.add(appDirectory(NEW));
+    const flatRoot = path.win32.join(WINDOWS_APPS, `OpenAI.Codex_${NEW}_x64__2p2nqsd0c76g0`);
+    await fs.mkdir(fixture.local(path.win32.join(flatRoot, 'app')), { recursive: true });
+    await fs.writeFile(fixture.local(path.win32.join(flatRoot, 'app', 'ChatGPT.exe')), 'fixture');
+    const app = await findWinApp({
+      env: {}, config: { codexAppPath: appDirectory(OLD) }, packageLocations: [flatRoot], ...fixture.io,
+      readdir: async () => { throw Object.assign(new Error('access denied'), { code: 'EACCES' }); },
+    });
+    assert.equal(app.executable, path.win32.join(flatRoot, 'app', 'ChatGPT.exe'));
   });
 
   for (const name of [null, 'ChatGPT.exe', 'Codex.exe']) {
@@ -128,6 +174,17 @@ test('an inaccessible package is ignored and an unreadable parent explains the p
   const options = { env: {}, config: { codexAppPath: flatApp(OLD) }, ...fixture.io };
   await assert.rejects(findWinApp({ ...options, access: async () => { throw denied; } }), /未找到可用的替代版本/);
   await assert.rejects(findWinApp({ ...options, readdir: async () => { throw denied; } }), /无法读取 WindowsApps.*访问权限/);
+});
+
+test('registered package output is trimmed and deduplicated', async () => {
+  const calls = [];
+  const locations = await listRegisteredWinAppLocations({
+    platform: 'win32',
+    runCommand: async (...args) => { calls.push(args); return { stdout: ' C:\\one\r\nC:\\two\nC:\\one\r\n' }; },
+  });
+  assert.deepEqual(locations, ['C:\\one', 'C:\\two']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'powershell.exe');
 });
 
 test('an outdated environment path still outranks a usable config path', async t => {
