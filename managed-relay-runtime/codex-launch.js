@@ -76,7 +76,7 @@ async function macLaunch(app, args) {
 // Codex 桌面应用在 Windows 上没有固定的公开安装位置，这里按常见布局探测。
 // 也可以设置 CODEX_APP_PATH，或在项目 JSON 配置文件里填 codexAppPath，
 // 指向 ChatGPT.exe、Codex.exe 本身或它所在的目录。
-// 默认优先 ChatGPT.exe，兼容旧版 Codex.exe；完整文件路径始终按用户指定的启动。
+// 默认优先 ChatGPT.exe，兼容旧版 Codex.exe；完整文件路径保留指定的文件名。
 const WIN_APP_NAMES = ['ChatGPT.exe', 'Codex.exe'];
 const WIN_APP_DIRECTORIES = [
   ['LOCALAPPDATA', 'Programs', 'ChatGPT'],
@@ -87,8 +87,64 @@ const WIN_APP_DIRECTORIES = [
   ['PROGRAMFILES', 'Codex'],
 ];
 
+// 只替换 WindowsApps 中 OpenAI.Codex 的包目录，不递归扫描磁盘。
+// 同时兼容 OpenAI.Codex_<版本>_x64__<发布者>\app 和分层的
+// OpenAI.Codex\_<版本>\_x64\_\_<发布者>\app；后者保留版本之后的目录结构。
+function winAppUpdatePattern(explicit) {
+  const normalized = path.win32.normalize(explicit).replace(/\\+$/, '');
+  const filename = path.win32.basename(normalized);
+  const isExecutable = WIN_APP_NAMES.some(name => name.toLowerCase() === filename.toLowerCase());
+  const directory = isExecutable ? path.win32.dirname(normalized) : normalized;
+  if (path.win32.basename(directory).toLowerCase() !== 'app') return null;
+  const segments = directory.split('\\');
+  const windowsApps = segments.findIndex(segment => segment.toLowerCase() === 'windowsapps');
+  if (windowsApps < 0) return null;
+  let index = windowsApps + 1;
+  let prefix = 'OpenAI.Codex_';
+  if (segments[index]?.toLowerCase() === 'openai.codex') {
+    index += 1;
+    prefix = '_';
+  } else if (index !== segments.length - 2) return null;
+  if (!segments[index]?.toLowerCase().startsWith(prefix.toLowerCase()) || segments[index].length <= prefix.length) return null;
+  return {
+    parent: segments.slice(0, index).join('\\'),
+    prefix: prefix.toLowerCase(),
+    suffix: segments.slice(index + 1),
+    names: isExecutable ? [filename] : WIN_APP_NAMES,
+  };
+}
+
+async function findUpdatedWinApp(explicit, { access = fs.access, stat = fs.stat, readdir = fs.readdir } = {}) {
+  const pattern = winAppUpdatePattern(explicit);
+  if (!pattern) return null;
+  let entries;
+  try { entries = await readdir(pattern.parent, { withFileTypes: true }); }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+    throw new Error(`无法读取 WindowsApps 安装目录：${pattern.parent}。请检查访问权限。`);
+  }
+  const matches = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.toLowerCase().startsWith(pattern.prefix) || entry.name.length <= pattern.prefix.length) continue;
+    for (const name of pattern.names) {
+      const executable = path.win32.join(pattern.parent, entry.name, ...pattern.suffix, name);
+      try {
+        if (!(await stat(executable)).isFile()) continue;
+        await access(executable);
+        matches.push({ app: executable, executable });
+        break;
+      } catch { /* 更新残留或不可访问的安装包不能作为启动目标。 */ }
+    }
+  }
+  if (matches.length > 1) {
+    const candidates = matches.map(match => match.executable).sort().join('\n');
+    throw new Error(`原应用路径已失效，但找到多个可用的 WindowsApps 安装目录，请选择一个并更新应用路径：\n${candidates}`);
+  }
+  return matches[0] || null;
+}
+
 async function findWinApp(options = {}) {
-  const { env = process.env, config = null, access = fs.access, stat = fs.stat } = options;
+  const { env = process.env, config = null, access = fs.access, stat = fs.stat, readdir = fs.readdir } = options;
   const fileConfig = config !== null ? config : loadCodexConfig(configPath(env));
   const explicit = resolveCodexPaths({ env, config: fileConfig }).appPath;
   if (explicit) {
@@ -103,7 +159,10 @@ async function findWinApp(options = {}) {
         try { await access(executable); return { app: executable, executable }; } catch { /* Try the other executable name. */ }
       }
     } catch { /* Explain an unavailable explicit path below. */ }
-    throw new Error(`指定的 Codex 应用不可用：${explicit}。请确认路径存在，指向 ChatGPT.exe、Codex.exe 或包含其中之一的目录（检查 ${source}）。`);
+    const updated = await findUpdatedWinApp(explicit, { access, stat, readdir });
+    if (updated) return updated;
+    const updateHint = winAppUpdatePattern(explicit) ? '已按 WindowsApps 安装包目录特征查找，未找到可用的替代版本。' : '';
+    throw new Error(`指定的 Codex 应用不可用：${explicit}。${updateHint}请确认路径存在，指向 ChatGPT.exe、Codex.exe 或包含其中之一的目录（检查 ${source}）。`);
   }
   // 先在所有候选目录找 ChatGPT.exe，再回退 Codex.exe，避免旧安装抢先命中。
   for (const name of WIN_APP_NAMES) {
@@ -202,6 +261,10 @@ async function launch(options = {}) {
   if (argv.some(arg => arg !== '--check')) throw new Error('支持的参数：--check（仅检查，不启动）。');
   const check = argv.includes('--check');
   const app = await platform.findApp({ env });
+  if (process.platform === 'win32') {
+    const explicit = resolveCodexPaths({ env }).appPath;
+    if (explicit && winAppUpdatePattern(explicit)) console.log(`已定位 WindowsApps 应用：${app.executable}`);
+  }
   const running = await platform.isRunning(app.executable);
   if (running && !check) throw new Error(`Codex 正在运行。${platform.quitHint}，再运行此脚本。`);
   const port = Number(env.RELAY_UI_PORT || 3790);
@@ -227,4 +290,4 @@ async function launch(options = {}) {
 }
 
 if (require.main === module) launch().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { bypassList, launchArguments, relayStatus, findWinApp, findMacApp, describeConfig, launch };
+module.exports = { bypassList, launchArguments, relayStatus, findWinApp, findUpdatedWinApp, findMacApp, describeConfig, launch };

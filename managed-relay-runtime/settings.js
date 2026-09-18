@@ -3,6 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { atomicWrite, problem } = require('./config-store');
 const { parseLooseJson, expandPath } = require('./codex-config');
+const { findUpdatedWinApp } = require('./codex-launch');
 
 // 目录设置必须存在 CODEX_HOME 之外：它记录的正是 CODEX_HOME 的位置，
 // 存进去会变成先有鸡还是先有蛋。这里按平台放到用户的配置目录。
@@ -58,12 +59,19 @@ async function writeToolConfig(file, patch, { create = false } = {}) {
 const writeConfigHome = (file, home) => writeToolConfig(file, { codexHome: home });
 const writeConfigAppPath = (file, appPath) => writeToolConfig(file, { codexAppPath: appPath }, { create: true });
 
-async function resolveAppPath(target) {
+async function resolveAppPath(target, { platform = process.platform, stat = fs.stat, access = fs.access, readdir = fs.readdir } = {}) {
   if (typeof target !== 'string' || target.includes('\0')) throw problem('请填写有效的 ChatGPT 应用路径。', 400);
   const resolved = expandPath(target);
   if (!resolved) return null;
-  const stat = await fs.stat(resolved).catch(() => null);
-  if (!stat || (!stat.isFile() && !stat.isDirectory())) throw problem('应用路径不存在或不可访问，请填写可执行文件或应用所在目录。', 400);
+  const info = await stat(resolved).catch(() => null);
+  if (!info || (!info.isFile() && !info.isDirectory())) {
+    // 更新后重新保存旧路径也可通过校验；保留原值作为以后启动时的查找依据。
+    if (platform === 'win32') {
+      try { if (await findUpdatedWinApp(resolved, { stat, access, readdir })) return resolved; }
+      catch (error) { throw problem(error.message, 400); }
+    }
+    throw problem('应用路径不存在或不可访问，请填写可执行文件或应用所在目录。', 400);
+  }
   return resolved;
 }
 

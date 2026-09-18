@@ -84,6 +84,7 @@ test('an unavailable explicit directory reports both names instead of launching 
     config: { codexAppPath: WINDOWS_APPS_DIR },
     access: async target => { checked.push(target); throw new Error('ENOENT'); },
     stat: async () => ({ isDirectory: () => true }),
+    readdir: async () => [],
   }), error => /Codex\.exe/.test(error.message) && /ChatGPT\.exe/.test(error.message) && /codexAppPath/.test(error.message));
   assert.deepEqual(checked, [path.win32.join(WINDOWS_APPS_DIR, 'ChatGPT.exe'), path.win32.join(WINDOWS_APPS_DIR, 'Codex.exe')]);
 });

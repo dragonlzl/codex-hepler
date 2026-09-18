@@ -73,6 +73,10 @@ start-codex-local.cmd --check        # Windows
 
 填写目录时，脚本优先查找 `ChatGPT.exe`，找不到再使用旧版 `Codex.exe`。填写完整文件路径时，使用指定文件。WindowsApps 安装包中的 `app/ChatGPT.exe` 同样可以直接指定；建议使用 `/` 分隔目录，避免 JSON 反斜杠转义。
 
+**WindowsApps 更新无需重填路径**：继续保存某次安装的完整目录即可。启动时先检查原路径；原路径失效后，会在同一安装位置按包名特征查找新版。例如 `C:/Program Files/WindowsApps/OpenAI.Codex_26.908.9136.0_x64__2p2nqsd0c76g0/app` 会匹配同一 WindowsApps 目录下的 `OpenAI.Codex_*/app`。也兼容 `C:/Program Files/WindowsApps/OpenAI.Codex/_26.908.9136.0/_x64/_/_2p2nqsd0c76g0/app` 这种分层路径，只替换版本目录，其余层级保持一致。
+
+只有找到唯一可用安装才会启动；填写目录时优先 `ChatGPT.exe`，填写完整文件路径时保留该文件名。多个安装同时可用时会列出候选并提示选择；没有匹配或安装目录不可读时会给出错误提示。此规则同时适用于 JSON 配置和 `CODEX_APP_PATH`，不会改写原配置，连续更新后仍可复用。启动和 `--check` 会打印实际定位到的应用路径。
+
 同目录的 `codex-relay.config.example.json` 是模板；本机的 `codex-relay.config.json` 不会进版本库。字段说明见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md#项目配置文件-codex-relayconfigjson)。
 
 Windows 上会先按以下目录顺序查找 `ChatGPT.exe`，全部找不到再按同样顺序查找 `Codex.exe`。ChatGPT 安装目录优先于旧 Codex 安装目录；都找不到时需要手动设置：
