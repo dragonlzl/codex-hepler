@@ -171,3 +171,13 @@ footer{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
 .availability-sample.maintenance{background:#80a6cd}
 
 .account-availability{padding-top:12px;margin-top:10px;border-top:1px solid #edf1ee;min-width:0}
+
+/* Provider cards use two columns on wide workspaces; each card remains an independent
+   layout so expanded accounts and long subscription content do not stretch its sibling. */
+@media(min-width:1000px){
+  .route-list{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:16px}
+  .route-list>.empty-state{grid-column:1/-1}
+}
+@media(min-width:1400px){
+  .route-list{gap:20px}
+}
