@@ -123,14 +123,14 @@ async function start(options = {}) {
       Object.assign(holder, { home: resolved, ...next });
       next = null;
       homeSource = fromConfig ? 'config' : 'saved';
-      previous.availability.close();
+      await previous.availability.close();
       previous.outbound.close();
       await previous.diagnostics.close();
       lastRequest = null;
       lastDiagnostic = null;
       return { message: `已切换到 ${resolved}，已保存到${fromConfig ? ' JSON 配置文件' : '目录设置'}${created ? '，并创建了空的 key_config.json' : ''}。` };
     } finally {
-      if (next) { next.availability.close(); next.outbound.close(); await next.diagnostics.close(); }
+      if (next) { await next.availability.close(); next.outbound.close(); await next.diagnostics.close(); }
       savingPaths = false;
     }
   };
@@ -155,6 +155,16 @@ async function start(options = {}) {
         if (req.headers.origin && req.headers.origin !== uiUrl) throw problem('跨站请求不允许。', 403);
         if (!String(req.headers['content-type']).startsWith('application/json')) throw problem('需要 JSON 请求。', 415);
         const payload = await body(req);
+        if (url.pathname.startsWith('/api/availability/browser-login/')) {
+          const action = url.pathname.slice('/api/availability/browser-login/'.length);
+          const result = action === 'start' ? await availability.startBrowserLogin(payload)
+            : action === 'status' ? availability.browserLoginStatus(payload.id)
+              : action === 'frame' ? await availability.browserLoginSurface(payload.id)
+                : action === 'input' ? await availability.browserLoginSurface(payload.id, payload.event ?? null)
+              : action === 'cancel' ? availability.cancelBrowserLogin(payload.id) : null;
+          if (!result) throw problem('接口不存在。', 404);
+          json(res, 200, result); return;
+        }
         let result;
         if (url.pathname === '/api/select') result = await store.select(payload.name, payload.mode);
         else if (url.pathname === '/api/proxy/install') result = await store.install(payload.name);
@@ -172,6 +182,7 @@ async function start(options = {}) {
         else if (url.pathname === '/api/packycode/balance/settings') result = await availability.packyBalance.saveSettings(payload);
         else if (url.pathname === '/api/packycode/balance/source') result = await availability.changeBalanceSource(() => store.setPackyBalanceSource(payload));
         else if (url.pathname === '/api/timicc/status/mode') result = await availability.changeStatusMode(() => store.setTimiccStatusMode(payload));
+        else if (url.pathname === '/api/aigo/status/mode') result = await availability.changeStatusMode(() => store.setAigoStatusMode(payload));
         else if (url.pathname === '/api/network') result = await outbound.save(payload);
         else if (url.pathname === '/api/network/test') {
           const entry = await store.entry(payload.name);
@@ -217,8 +228,8 @@ async function start(options = {}) {
     boundPorts = [proxy.address().port, ui.address().port];
     outbound.localPorts.add(proxy.address().port);
     outbound.localPorts.add(ui.address().port);
-  } catch (error) { availability.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
-  return { uiUrl, proxyUrl: store.proxyUrl, store, outbound, status, close: async () => { availability.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close(); } };
+  } catch (error) { await availability.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
+  return { uiUrl, proxyUrl: store.proxyUrl, store, outbound, status, close: async () => { await availability.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close(); } };
 }
 
 if (require.main === module) {

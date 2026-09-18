@@ -14,6 +14,9 @@ const rightcode = require('./account-rightcode');
 const rightcodeStatus = require('./availability-rightcode');
 const timiccStatus = require('./availability-timicc');
 const timiccKeys = require('./timicc-key-groups');
+const aigoStatus = require('./availability-aigo');
+const aigoKeys = require('./aigo-key-groups');
+const { BrowserLogin } = require('./browser-login');
 const aixor = require('./account-aixor');
 const krill = require('./account-krill');
 const packy = require('./account-packycode');
@@ -28,6 +31,7 @@ const REFRESH_MS = 15000;
 const HISTORY_LENGTH = 60;
 const STALE_MS = 180000;
 const TIMICC_BALANCE_ENDPOINT = 'https://timicc.com/api/v1/auth/me';
+const AIGO_BALANCE_ENDPOINT = 'https://api.aigo0.com/api/v1/auth/me';
 
 function sample(value) {
   if (!value || !Number.isFinite(value.ts) || value.ts <= 0 || value.ts > 8640000000000 || typeof value.ok !== 'boolean') {
@@ -131,6 +135,17 @@ const ADAPTERS = Object.freeze([{
   keys: { endpoint: timiccKeys.endpoint(1), load: timiccKeys.readKeyGroups, parse: value => value, requiresAuthorization: true },
   balance: { endpoint: TIMICC_BALANCE_ENDPOINT, parse: readBlackaicodingBalance, requiresAuthorization: true },
   verifyAuthorization: { endpoint: TIMICC_BALANCE_ENDPOINT, parse: readBlackaicodingBalance },
+}, {
+  id: 'aigo', hosts: ['api.aigo0.com'],
+  source: { name: '派大星', url: 'https://api.aigo0.com/monitor' },
+  endpoint: aigoStatus.ENDPOINT,
+  requiresAuthorization: true,
+  accountScopedStatus: true,
+  parse: (data, now) => aigoStatus.readAigoStatus(data, MODELS, now),
+  snapshot: aigoStatus.channelSnapshot,
+  keys: { endpoint: aigoKeys.keyEndpoint(1), load: aigoKeys.readKeyGroups, parse: value => value, requiresAuthorization: true },
+  balance: { endpoint: AIGO_BALANCE_ENDPOINT, parse: readBlackaicodingBalance, requiresAuthorization: true },
+  verifyAuthorization: { endpoint: AIGO_BALANCE_ENDPOINT, parse: readBlackaicodingBalance },
 }]);
 
 function adapterFor(baseurl) {
@@ -143,12 +158,13 @@ function adapterFor(baseurl) {
 
 function requestContent(url, { outbound, signal, token, json, site = 'blackaicoding', session, captureCookies }, accept) {
   const targets = { blackaicoding: [BLACKAICODING_ENDPOINT, BLACKAICODING_BALANCE_ENDPOINT], input: [INPUT_BALANCE_ENDPOINT, INPUT_SUBSCRIPTIONS_ENDPOINT],
-    krill: [krill.IDENTITY_ENDPOINT, krill.BALANCE_ENDPOINT, krill.SUBSCRIPTIONS_ENDPOINT, krill.USAGE_ENDPOINT], rightcode: [rightcode.BALANCE_ENDPOINT], timicc: [TIMICC_BALANCE_ENDPOINT] };
+    krill: [krill.IDENTITY_ENDPOINT, krill.BALANCE_ENDPOINT, krill.SUBSCRIPTIONS_ENDPOINT, krill.USAGE_ENDPOINT], rightcode: [rightcode.BALANCE_ENDPOINT],
+    timicc: [TIMICC_BALANCE_ENDPOINT], aigo: [AIGO_BALANCE_ENDPOINT] };
   const usageQuery = site === 'krill' && url === krill.USAGE_ENDPOINT && token && !session;
   const aixorTargets = [aixor.BALANCE_ENDPOINT, aixor.SUBSCRIPTIONS_ENDPOINT, aixor.PLANS_ENDPOINT];
   const sessionTargets = site === 'aixor' ? aixorTargets : site === 'packycode' ? [packy.BALANCE_ENDPOINT] : [];
   const loginTarget = Object.hasOwn(ACCOUNT_SITES, site) && (site === 'packycode' ? packy.isLoginUrl(url) : Object.values(loginEndpoints(site)).includes(url));
-  if (token && !targets[site]?.includes(url) && !(site === 'timicc' && timiccKeys.isKeyEndpoint(url))) return Promise.reject(new Error('Monitor credential target rejected'));
+  if (token && !targets[site]?.includes(url) && !(site === 'timicc' && timiccKeys.isKeyEndpoint(url)) && !(site === 'aigo' && (aigoKeys.isKeyEndpoint(url) || aigoStatus.isMonitorEndpoint(url)))) return Promise.reject(new Error('Monitor credential target rejected'));
   if (session && (!ACCOUNT_SITES[site]?.session || token || !(json === undefined ? sessionTargets : [loginEndpoints(site).totp]).includes(url))) return Promise.reject(new Error('Session credential target rejected'));
   if (captureCookies && (!ACCOUNT_SITES[site]?.session || !loginTarget || json === undefined)) return Promise.reject(new Error('Login cookie target rejected'));
   if (json !== undefined && !usageQuery && (token || !loginTarget)) return Promise.reject(new Error('Login credential target rejected'));
@@ -225,6 +241,7 @@ class Availability {
     this.controller = new AbortController();
     this.authorizationQueue = Promise.resolve();
     this.authorizationVersion = 0;
+    this.browserLogin = new BrowserLogin(options.browserLoginOptions);
     this.packyBalance = options.getEntry ? new PackyBalance({ ...options.packyBalanceOptions, home: options.home, outbound,
       getEntry: options.getEntry, isPacky: baseurl => adapterFor(baseurl)?.id === 'packycode' }) : null;
     this.loginClients = new Map(Object.keys(ACCOUNT_SITES).map(site => [site,
@@ -316,6 +333,30 @@ class Availability {
       modelNote: '跟随 API Key 分组「' + groupName + '」；gpt-6-astra 与 gpt-5.6-sol 共用该号池状态。' };
   }
 
+  async selectAigoPools(status, entry, groups) {
+    const unknown = message => ({ ...status, statusMode: 'api-key', channels: [], state: 'no-data', message, modelNote: message });
+    const all = (extra = {}) => ({ ...status, statusMode: 'all', collapsibleChannels: true, ...extra });
+    let key;
+    try { key = await this.getEntry(entry.name); } catch { key = null; }
+    if (typeof key?.value !== 'string' || !key.value) {
+      return entry.statusMode === 'api-key' ? unknown('无法读取该子项的 API Key，请刷新列表。') : all();
+    }
+    if (entry.naturalAccountId && naturalAccountId(key) !== entry.naturalAccountId) {
+      return entry.statusMode === 'api-key' ? unknown('API Key 已变更，请刷新列表。') : all({ modelNote: '无法确认当前 API Key 分组，全部号池按指定顺序展示。' });
+    }
+    if (groups?.authRequired) return entry.statusMode === 'api-key' ? unknown('请登录派大星账号，以识别该 API Key 的号池。') : all({ modelNote: '请登录派大星账号，以将当前 API Key 对应号池置顶。' });
+    if (groups?.error) return entry.statusMode === 'api-key' ? unknown('API Key 号池查询失败，请检查网络或授权后重试；可切换为全部号池。') : all({ modelNote: 'API Key 号池暂时无法确认，全部号池按指定顺序展示。' });
+    const group = groups?.value?.[aigoKeys.keyHash(key.value)];
+    if (!group) return entry.statusMode === 'api-key' ? unknown('未在授权账号中找到该 API Key，请登录对应账号；可切换为全部号池。') : all({ modelNote: '未找到当前 API Key 的号池，全部号池按指定顺序展示。' });
+    const groupName = String(group.groupName || '').replaceAll(key.value, '[已隐藏]');
+    if (!group.pool) return entry.statusMode === 'api-key' ? unknown('该 API Key 的号池' + (groupName ? '「' + groupName + '」' : '') + '不在已配置的派大星监测范围内；可切换为全部号池。') : all({ modelNote: '当前 API Key 不属于已配置监测号池，全部号池按指定顺序展示。' });
+    const ordered = [...status.channels].sort((a, b) => (a.groupLabel === group.pool ? -1 : b.groupLabel === group.pool ? 1 : 0));
+    if (entry.statusMode === 'api-key') return { ...status, statusMode: 'api-key', keyGroup: groupName, channels: ordered.filter(channel => channel.groupLabel === group.pool),
+      modelNote: '跟随 API Key 号池「' + groupName + '」；gpt-6-astra 与 gpt-5.6-sol 共用该号池状态。' };
+    return { ...status, statusMode: 'all', keyGroup: groupName, channels: ordered, collapsibleChannels: true,
+      modelNote: '全部号池；当前 API Key 对应「' + groupName + '」已置顶。gpt-6-astra 与 gpt-5.6-sol 共用以下号池状态。' };
+  }
+
   retainPackySources(keys) {
     this.packyBalance?.retainSources(keys.filter(entry => adapterFor(entry.baseurl)?.id === 'packycode' && entry.balanceSource !== 'account')
       .map(entry => entry.accountBindingId ? entry.accountSourceName : entry.name));
@@ -405,14 +446,16 @@ class Availability {
       const scope = adapter.verifyAuthorization ? this.accountScope(adapter.id, { accountId }) : adapter.id;
       // Krill's different subscription endpoints share one public channel monitor.
       const provider = statusGroup({ baseurl, displayProviderId });
-      const statusScope = this.getEntries && !['krill', 'timicc'].includes(adapter.id) ? adapter.id + ':provider:' + provider : adapter.id;
+      const statusScope = adapter.accountScopedStatus ? scope + ':status' : this.getEntries && !['krill', 'timicc'].includes(adapter.id) ? adapter.id + ':provider:' + provider : adapter.id;
       const [entry, accounts, keyGroups] = await Promise.all([
-        this.read(adapter, model, 'status', monitors.get(provider) || scope, statusScope),
+        this.read(adapter, model, 'status', adapter.accountScopedStatus ? scope : monitors.get(provider) || scope, statusScope),
         Promise.all(['balance', 'subscriptions'].map(resource => !keyBalance && adapter[resource] ? this.read(adapter, model, resource, scope, statusScope) : null)),
-        adapter.id === 'timicc' && routeEntry.statusMode === 'api-key' ? this.read(adapter, model, 'keys', scope, statusScope) : null,
+        adapter.id === 'timicc' && routeEntry.statusMode === 'api-key' ? this.read(adapter, model, 'keys', scope, statusScope)
+          : adapter.id === 'aigo' ? this.read(adapter, model, 'keys', scope, statusScope) : null,
       ]);
       let status = entry.value?.[model];
       if (adapter.id === 'timicc' && status) status = await this.selectTimiccPool(status, routeEntry, keyGroups);
+      if (adapter.id === 'aigo' && status) status = await this.selectAigoPools(status, routeEntry, keyGroups);
       accounts.forEach((account, index) => {
         if (account) row[['balance', 'subscriptions'][index]] = {
           ...account.value, fetchedAt: account.fetchedAt,
@@ -469,13 +512,30 @@ class Availability {
     });
   }
 
+  async startBrowserLogin(payload) {
+    if (payload.site !== 'aigo') throw problem('该站点不使用浏览器登录。', 400);
+    const scope = await this.resolveScope(payload.site, payload);
+    const version = this.authorizationVersion;
+    const original = this.getEntry ? naturalAccountId(await this.getEntry(payload.name)) : null;
+    return this.browserLogin.start(scope, (token, signal) => this.queueAuthorization(async () => {
+      signal.throwIfAborted();
+      if (version !== this.authorizationVersion || scope !== await this.resolveScope(payload.site, payload) ||
+          (original && original !== naturalAccountId(await this.getEntry(payload.name)))) throw problem('账号配置或授权已变化，请重新打开登录窗口。', 409);
+      return this.saveAuthorization(payload.site, token, scope, signal);
+    }), { presentation: payload.presentation, viewport: payload.viewport });
+  }
+
+  browserLoginStatus(id) { return this.browserLogin.status(id); }
+  browserLoginSurface(id, event) { return this.browserLogin.surface(id, event); }
+  cancelBrowserLogin(id) { return this.browserLogin.cancel(id); }
+
   cancelLogin(site, challengeId, payload) {
     accountSite(site);
     const cancel = scope => { this.loginClients.get(scope).cancel(challengeId); return { message: '已取消二次验证。' }; };
     return this.getEntries ? this.resolveScope(site, payload).then(cancel) : cancel(site);
   }
 
-  async saveAuthorization(site, token, scope = site) {
+  async saveAuthorization(site, token, scope = site, externalSignal) {
     const definition = accountSite(site);
     const auth = this.auths.get(scope), login = this.loginClients.get(scope);
     if (token === '') {
@@ -486,7 +546,7 @@ class Availability {
     }
     const credential = definition.session ? aixor.validateAixorSession(token) : validateSiteToken(site, token);
     const controller = new AbortController();
-    const signal = AbortSignal.any([this.controller.signal, controller.signal]);
+    const signal = AbortSignal.any([this.controller.signal, controller.signal, ...(externalSignal ? [externalSignal] : [])]);
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const verification = ADAPTERS.find(adapter => adapter.id === site).verifyAuthorization;
@@ -499,17 +559,19 @@ class Availability {
       if (networkError) throw networkError;
       throw problem([401, 403].includes(error.status) ? '账号授权无效或无访问权限，请重新登录。' : '未能验证账号授权，请稍后重试。', 400);
     } finally { clearTimeout(timer); controller.abort(); }
+    externalSignal?.throwIfAborted();
     await auth.save(definition.session ? credential : credential.token);
     login.clear();
     this.invalidateAuthorization(site, scope);
     return { message: definition.name + ' 账号授权已保存，过期后可在这里重新登录。', expiresAt: credential.expiresAt };
   }
 
-  close() {
+  async close() {
     this.controller.abort();
     this.packyBalance?.close();
     for (const client of this.loginClients.values()) client.clear();
     this.cache.clear();
+    await this.browserLogin.close();
   }
 }
 

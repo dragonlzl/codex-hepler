@@ -8,6 +8,7 @@ const ACCOUNT_SITES = Object.freeze({
   krill: Object.freeze({ name: 'Krill', origin: 'https://www.krill-code.com' }),
   rightcode: Object.freeze({ name: 'RC', origin: 'https://www.rightapi.ai' }),
   timicc: Object.freeze({ name: 'timiCC', origin: 'https://timicc.com' }),
+  aigo: Object.freeze({ name: '派大星', origin: 'https://api.aigo0.com' }),
 });
 
 function accountSite(id) {

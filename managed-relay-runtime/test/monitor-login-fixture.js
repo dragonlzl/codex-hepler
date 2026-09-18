@@ -37,6 +37,7 @@ function matrix() {
 
 async function request(url, { json, token }) {
   if (url.startsWith('https://timicc.com/') || url.startsWith('https://status.timicc.com/')) return require('./timicc-fixture').request(...arguments);
+  if (url.startsWith('https://api.aigo0.com/')) return require('./aigo-fixture').request(...arguments);
   if (url.startsWith('https://www.rightapi.ai/')) return require('./rightcode-fixture').request(...arguments);
   if (url.startsWith('https://www.packyapi.com/')) return require('./packy-account-fixture').request(...arguments);
   if (url.startsWith('https://aixor.cc/')) return require('./aixor-account-fixture').request(...arguments);

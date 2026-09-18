@@ -34,6 +34,7 @@ class MonitorLogin {
   clear() { for (const id of this.challenges.keys()) this.cancel(id); }
 
   async login(payload, signal) {
+    if (this.site === 'aigo') throw problem('派大星需要官网人机验证，请使用浏览器登录并自动授权，或手动 auth_token 授权。', 400);
     const secondStep = payload.challengeId !== undefined;
     let json;
     if (secondStep) {

@@ -63,6 +63,14 @@ const availability = new RelayAvailability({
       Object.assign(state, data.status); loaded = true; render();
     } finally { busy = false; renderControls(); }
   },
+  mutateAigoStatusMode: async payload => {
+    if (busy || networkBusy || draggedName) throw new Error('请等待当前操作完成。');
+    busy = true; mutationVersion++; renderControls();
+    try {
+      const data = await api('/api/aigo/status/mode', payload);
+      Object.assign(state, data.status); loaded = true; render();
+    } finally { busy = false; renderControls(); }
+  },
 });
 
 new AccountBindings({ list: routesPanel, getState: () => state, mutate: async (endpoint, payload) => {
@@ -180,7 +188,7 @@ function groupMarkup(group, index) {
     return '线路 ' + (endpoints.indexOf(address) + 1) + (peers.length > 1 ? ' · 账号 ' + (peers.indexOf(items) + 1) : '');
   };
   // Balance source and timiCC pool choice belong to each configuration, even with a shared login.
-  const displayAccounts = accounts.flatMap(items => ['packycode', 'timicc'].includes(items[0].merchantId) ? items.map(entry => [entry]) : [items]);
+  const displayAccounts = accounts.flatMap(items => ['packycode', 'timicc', 'aigo'].includes(items[0].merchantId) ? items.map(entry => [entry]) : [items]);
   const accountRows = displayAccounts.filter(items => items.some(entry => visible.includes(entry))).map(items => {
     const entry = items[0];
     const shared = entry.accountBindingId && entry.boundAccountCount > 1;
@@ -194,9 +202,10 @@ function groupMarkup(group, index) {
       (items.length > 1 ? '<span>' + items.length + ' 个配置共用</span>' : '') + '<span class="account-tools">' + bindings + '<span class="account-auth"></span></span></div>' +
       (entry.accountBindingId ? '<p class="account-source">共享信息来源：' + escapeHtml(entry.accountSourceName) + '</p>' : '') +
       (entry.merchantId === 'packycode' ? '<div class="account-balance-source"></div>' : '') + '<div class="account-data"></div>' +
-      (entry.merchantId === 'timicc' ? '<div class="account-status-mode"></div><div class="account-availability" data-name="' + escapeHtml(entry.name) + '"></div>' : '') + '</div></section>';
+      (entry.merchantId === 'timicc' ? '<div class="account-status-mode"></div><div class="account-availability" data-name="' + escapeHtml(entry.name) + '"></div>' : '') +
+      (entry.merchantId === 'aigo' ? '<div class="aigo-status-mode"></div><div class="account-availability" data-name="' + escapeHtml(entry.name) + '"></div>' : '') + '</div></section>';
   }).join('');
-  return '<section class="provider-card' + (active ? ' has-active' : '') + '" data-provider="' + escapeHtml(group.id) + '" data-name="' + escapeHtml(group.entries[0].name) + '"><header class="provider-heading"><button type="button" class="drag-handle provider-drag" title="拖动中转商排序；Alt + 上下方向键调整" aria-label="调整中转商 ' + escapeHtml(host) + ' 的顺序">⠿</button><span class="provider-avatar" aria-hidden="true">' + escapeHtml(host[0].toUpperCase()) + '</span><div class="provider-identity"><h3>' + escapeHtml(host) + '</h3><code>' + escapeHtml(krill ? endpoints.length + ' 条线路 · 按 Base URL 区分' : group.id.startsWith('merchant:') ? endpoints.length + ' 个接口地址' : group.id) + '</code></div><div class="provider-labels">' + (group.entries.some(entry => entry.pinned) ? '<span class="provider-pin">已置顶</span>' : '') + (active ? '<span class="active-tag">使用中' + (!visible.includes(active) ? ' · ' + escapeHtml(active.name) : '') + '</span>' : '') + '<span>' + group.entries.length + ' 个配置</span></div>' + (group.entries.length > 1 ? '<button type="button" class="group-toggle" data-provider="' + escapeHtml(group.id) + '" aria-expanded="' + open + '" aria-controls="' + id + '">' + (open ? '收起' : '展开全部') + '<span aria-hidden="true">' + (open ? '⌃' : '⌄') + '</span></button>' : '') + '</header>' + (group.entries[0].merchantId === 'timicc' ? '' : '<div class="provider-availability" data-name="' + escapeHtml(group.entries[0].name) + '"></div>') + '<div id="' + id + '" class="provider-accounts">' + accountRows + '</div></section>';
+  return '<section class="provider-card' + (active ? ' has-active' : '') + '" data-provider="' + escapeHtml(group.id) + '" data-name="' + escapeHtml(group.entries[0].name) + '"><header class="provider-heading"><button type="button" class="drag-handle provider-drag" title="拖动中转商排序；Alt + 上下方向键调整" aria-label="调整中转商 ' + escapeHtml(host) + ' 的顺序">⠿</button><span class="provider-avatar" aria-hidden="true">' + escapeHtml(host[0].toUpperCase()) + '</span><div class="provider-identity"><h3>' + escapeHtml(host) + '</h3><code>' + escapeHtml(krill ? endpoints.length + ' 条线路 · 按 Base URL 区分' : group.id.startsWith('merchant:') ? endpoints.length + ' 个接口地址' : group.id) + '</code></div><div class="provider-labels">' + (group.entries.some(entry => entry.pinned) ? '<span class="provider-pin">已置顶</span>' : '') + (active ? '<span class="active-tag">使用中' + (!visible.includes(active) ? ' · ' + escapeHtml(active.name) : '') + '</span>' : '') + '<span>' + group.entries.length + ' 个配置</span></div>' + (group.entries.length > 1 ? '<button type="button" class="group-toggle" data-provider="' + escapeHtml(group.id) + '" aria-expanded="' + open + '" aria-controls="' + id + '">' + (open ? '收起' : '展开全部') + '<span aria-hidden="true">' + (open ? '⌃' : '⌄') + '</span></button>' : '') + '</header>' + (['timicc', 'aigo'].includes(group.entries[0].merchantId) ? '' : '<div class="provider-availability" data-name="' + escapeHtml(group.entries[0].name) + '"></div>') + '<div id="' + id + '" class="provider-accounts">' + accountRows + '</div></section>';
 }
 
 function renderCurrentRoute() {
@@ -262,7 +271,7 @@ function applyAvailabilityFilter() {
   const groups = new Map(RelayGroups.group(state.keys).map(group => [group.id, group]));
   for (const card of list.querySelectorAll('.provider-card')) {
     const group = groups.get(card.dataset.provider);
-    const representative = group?.entries[0]?.merchantId === 'timicc' ? group.entries.find(entry => entry.name === state.activeName) || group.entries[0] : group?.entries[0];
+    const representative = ['timicc', 'aigo'].includes(group?.entries[0]?.merchantId) ? group.entries.find(entry => entry.name === state.activeName) || group.entries[0] : group?.entries[0];
     const category = availability.filterFor(representative);
     counts.all++;
     if (category) counts[category]++;

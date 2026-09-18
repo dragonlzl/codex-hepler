@@ -15,13 +15,14 @@ const RelayGroups = (() => {
   function providerLabel(id) {
     if (id.startsWith('merchant:')) {
       const merchant = id.slice('merchant:'.length);
-      return ({ input: 'INPUT', blackaicoding: 'code for me', aixor: 'Aixor', packycode: 'packycode', krill: 'Krill', rightcode: 'RC', timicc: 'timiCC' })[merchant] || providerLabel(merchant);
+      return ({ input: 'INPUT', blackaicoding: 'code for me', aixor: 'Aixor', packycode: 'packycode', krill: 'Krill', rightcode: 'RC', timicc: 'timiCC', aigo: '派大星' })[merchant] || providerLabel(merchant);
     }
     if (id === 'krill') return 'Krill';
     try {
       const url = new URL(id);
       if (['rightapi.ai', 'www.rightapi.ai'].includes(url.hostname)) return 'RC';
       if (['timicc.com', 'www.timicc.com'].includes(url.hostname)) return 'timiCC';
+      if (url.hostname === 'api.aigo0.com') return '派大星';
       return packyHosts.has(url.hostname) ? 'packycode' : url.host;
     } catch { return '未配置地址'; }
   }

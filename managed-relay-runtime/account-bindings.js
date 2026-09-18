@@ -21,6 +21,7 @@ function bindingModel(keys, state, context = '') {
     // Preserve the existing account IDs and credentials when recognizing this site.
     if (['https://rightapi.ai', 'https://www.rightapi.ai'].includes(record.merchant)) record.merchant = 'rightcode';
     if (['https://timicc.com', 'https://www.timicc.com'].includes(record.merchant)) record.merchant = 'timicc';
+    if (record.merchant === 'https://api.aigo0.com') record.merchant = 'aigo';
     ids.add(record.id);
     for (const id of record.members) {
       if (byNatural.has(id) || natural.get(id)?.some(entry => merchantId(entry.baseurl) !== record.merchant)) throw invalid();

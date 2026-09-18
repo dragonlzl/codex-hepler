@@ -29,6 +29,7 @@ const { start } = require('../../managed-relay-server');
       { name: 'rightcode', value: 'sk-test-rightcode', baseurl: 'https://www.rightapi.ai/v1' },
       { name: 'RC 备用', value: 'sk-test-rightcode-backup', baseurl: 'https://www.rightapi.ai/v1' },
       { name: 'timi', value: 'sk-test-timicc', baseurl: 'https://timicc.com' },
+      { name: '派大星', value: 'sk-aigo-cx008', baseurl: 'https://api.aigo0.com' },
       { name: '其他中转', value: 'sk-test-other', baseurl }]
     : Array.from({ length: 15 }, (_, i) => ({ name: i === 0 ? '中转站甲' : i === 1 ? '备用线路✨' : `测试中转 ${i}`, value: `sk-test-${i}`, baseurl }));
   if (process.env.RELAY_GROUPING_FIXTURE) {

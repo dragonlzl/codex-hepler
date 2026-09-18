@@ -77,6 +77,9 @@ function packyBalanceSource(state, name) {
 function timiccStatusMode(state, name) {
   return Object.hasOwn(state.timiccStatusModes || {}, name) && state.timiccStatusModes[name] === 'api-key' ? 'api-key' : 'all';
 }
+function aigoStatusMode(state, name) {
+  return Object.hasOwn(state.aigoStatusModes || {}, name) && state.aigoStatusModes[name] === 'api-key' ? 'api-key' : 'all';
+}
 
 function orderedKeys(keys, state) {
   const byName = new Map(keys.map(entry => [entry.name, entry]));
@@ -158,9 +161,11 @@ class ConfigStore {
       accountBindingAvailable: true, accountBindingsRevision: bindings.revision,
       packyBalanceSourceAvailable: true,
       timiccStatusModeAvailable: true,
+      aigoStatusModeAvailable: true,
       keys: ordered.map(entry => ({ name: entry.name, baseurl: entry.baseurl, providerId: providerId(entry.baseurl), ...bindings.describe(entry),
         ...(merchantId(entry.baseurl) === 'packycode' ? { balanceSource: packyBalanceSource(current.state, entry.name) } : {}),
         ...(merchantId(entry.baseurl) === 'timicc' ? { statusMode: timiccStatusMode(current.state, entry.name) } : {}),
+        ...(merchantId(entry.baseurl) === 'aigo' ? { statusMode: aigoStatusMode(current.state, entry.name) } : {}),
         maskedValue: mask(entry.value), revision: entryRevision(entry), active: entry.name === active?.name, pinned: pinned.has(entry.name) })),
     };
   }
@@ -316,6 +321,11 @@ class ConfigStore {
         delete state.timiccStatusModes[originalName];
         if (merchantId(entry.baseurl) === 'timicc') state.timiccStatusModes = { ...state.timiccStatusModes, [entry.name]: timiccStatusMode(current.state, originalName) };
       }
+      if (Object.hasOwn(state.aigoStatusModes || {}, originalName)) {
+        state.aigoStatusModes = { ...state.aigoStatusModes };
+        delete state.aigoStatusModes[originalName];
+        if (merchantId(entry.baseurl) === 'aigo') state.aigoStatusModes = { ...state.aigoStatusModes, [entry.name]: aigoStatusMode(current.state, originalName) };
+      }
       if (current.state.accountBindings) state.accountBindings = updateBindingsForEdit(bindings, original, entry, config.keys);
       if (entry.name !== originalName) {
         if (state.activeName === originalName) state.activeName = entry.name;
@@ -345,6 +355,19 @@ class ConfigStore {
       if (payload.revision !== entryRevision(entry) || payload.previousMode !== timiccStatusMode(current.state, entry.name)) throw problem('子项配置已变化，请刷新后重试。', 409);
       await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state,
         timiccStatusModes: { ...current.state.timiccStatusModes, [entry.name]: payload.mode } }) }]);
+      return { message: '已保存该子项的号池展示方式。' };
+    });
+  }
+
+  setAigoStatusMode(payload) {
+    return this.serialize(async () => {
+      if (!['all', 'api-key'].includes(payload?.mode)) throw problem('请选择全部号池或跟随 API Key。', 400);
+      const { config } = await this.keys(), current = await this.read();
+      const entry = config.keys.find(entry => entry.name === payload.name);
+      if (!entry || merchantId(entry.baseurl) !== 'aigo') throw problem('请选择派大星子项。', 400);
+      if (payload.revision !== entryRevision(entry) || payload.previousMode !== aigoStatusMode(current.state, entry.name)) throw problem('子项配置已变化，请刷新后重试。', 409);
+      await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state,
+        aigoStatusModes: { ...current.state.aigoStatusModes, [entry.name]: payload.mode } }) }]);
       return { message: '已保存该子项的号池展示方式。' };
     });
   }

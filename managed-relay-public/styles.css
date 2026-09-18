@@ -152,25 +152,43 @@ footer{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
 .availability-filters{display:inline-flex;max-width:100%;gap:4px;padding:4px;background:#eaf0ec;border:1px solid #dfe7e1;border-radius:7px}.availability-filters button{display:flex;align-items:center;gap:8px;min-height:34px;padding:7px 13px;border:1px solid transparent;border-radius:5px;background:transparent;color:#738779;font-size:12px;white-space:nowrap}.availability-filters button:hover{color:var(--green);background:#f5f9f6}.availability-filters button[aria-pressed="true"]{color:#246d4e;background:white;border-color:#d9e5dc;box-shadow:0 1px 3px #294e3510}.availability-filters span{padding:1px 5px;min-width:19px;border-radius:4px;background:#e0eae3;color:#688572;font-size:10px;text-align:center;font-variant-numeric:tabular-nums}.availability-filters button[aria-pressed="true"] span{background:#e9f4ed;color:#28724f}.filter-help{margin:10px 0 18px;color:#8a998f;font-size:10px;line-height:1.7}@media(max-width:520px){.availability-filters{display:flex;width:100%;gap:2px;padding:3px}.availability-filters button{flex:1;justify-content:center;padding-inline:5px;font-size:11px;gap:5px}.filter-help{font-size:9px}}
 
 /* Each Packycode configuration selects one balance source. */
-.packy-source,.timicc-mode{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;min-width:0;border:0;padding:0;margin:10px 0 2px;font-size:11px;color:var(--muted)}
-.packy-source legend,.timicc-mode legend{float:left;margin-right:14px;line-height:24px;color:#7d8f82;font-size:10px}
-.packy-source label,.timicc-mode label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;min-height:24px}
-.packy-source input,.timicc-mode input{accent-color:var(--green);margin:0;width:14px;height:14px}
-.packy-source label:has(input:checked),.timicc-mode label:has(input:checked){color:var(--green)}
-.packy-source:disabled,.timicc-mode:disabled{opacity:.65}
-.packy-source-error,.timicc-mode-error{font-size:11px;color:#986818;margin:6px 0;overflow-wrap:anywhere}
+.packy-source,.timicc-mode,.aigo-mode{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;min-width:0;border:0;padding:0;margin:10px 0 2px;font-size:11px;color:var(--muted)}
+.packy-source legend,.timicc-mode legend,.aigo-mode legend{float:left;margin-right:14px;line-height:24px;color:#7d8f82;font-size:10px}
+.packy-source label,.timicc-mode label,.aigo-mode label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;min-height:24px}
+.packy-source input,.timicc-mode input,.aigo-mode input{accent-color:var(--green);margin:0;width:14px;height:14px}
+.packy-source label:has(input:checked),.timicc-mode label:has(input:checked),.aigo-mode label:has(input:checked){color:var(--green)}
+.packy-source:disabled,.timicc-mode:disabled,.aigo-mode:disabled{opacity:.65}
+.packy-source-error,.timicc-mode-error,.aigo-mode-error{font-size:11px;color:#986818;margin:6px 0;overflow-wrap:anywhere}
 .packy-captcha-dialog{width:min(430px,calc(100% - 16px));padding:12px;overflow:hidden}
 .packy-captcha-dialog h2{font-size:16px;margin:6px 8px 4px}
 .packy-captcha-dialog iframe{border:0;width:100%;height:min(440px,calc(100dvh - 150px));display:block}
 .packy-captcha-dialog button{display:block;margin-left:auto;padding:8px 16px;border:1px solid var(--line);border-radius:5px;background:white;color:var(--muted)}
 .auth-toast{top:50%;left:50%;right:auto;transform:translate(-50%,-50%)}
 
-.availability-channel + .availability-channel{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.availability-channels{container-type:inline-size}
+.availability-channel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}
+.availability-channel{min-width:0;padding:10px;border:1px solid var(--line);border-radius:6px;background:#fafcfb;overflow-wrap:anywhere}
+.availability-channel:only-child{grid-column:1/-1}
+.availability-channel .availability-bars{gap:1px}
+@container(max-width:340px){.availability-channel-grid{grid-template-columns:minmax(0,1fr)}}
 .availability-channels>.availability-model-note{margin:0 0 12px}
+.availability-channels>.availability-model-note:empty{display:none}
 .availability-state.maintenance{color:#537ba4}
 .availability-sample.maintenance{background:#80a6cd}
 
 .account-availability{padding-top:12px;margin-top:10px;border-top:1px solid #edf1ee;min-width:0}
+.aigo-channels-toggle{margin:0 0 10px;padding:5px 9px;border:1px solid #caddd0;border-radius:5px;background:#fff;color:#377658;font-size:11px}
+.aigo-channels-toggle:hover{background:#edf6f0}
+#monitor-auth-dialog.has-projected-login{width:min(840px,calc(100% - 32px))}
+#monitor-auth-dialog.has-projected-login #monitor-auth-description,#monitor-auth-dialog.has-projected-login .monitor-auth-help,#monitor-auth-dialog.has-projected-login .monitor-auth-advanced,#monitor-auth-dialog.has-projected-login #monitor-browser-fallback{display:none}
+.projected-login-caption{font-size:12px;line-height:1.7;color:var(--muted)}
+.projected-login-stage{position:relative;min-height:100px;max-width:760px;margin-inline:auto;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#f4f7f5;touch-action:none}
+.projected-login-stage img{display:block;width:100%;height:auto;user-select:none;cursor:default}
+.projected-login-stage:focus-within{outline:2px solid #78aa92;outline-offset:2px}
+.projected-login-keyboard{position:absolute!important;top:0;left:0;width:1px!important;height:1px!important;min-height:0!important;opacity:0;padding:0!important;border:0!important;resize:none;pointer-events:none}
+.projected-login-tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.projected-login-tools button,#monitor-browser-fallback button{border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--green);padding:7px 10px;font-size:11px}
+.projected-login-error{min-height:18px;color:#986818;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 
 /* Provider cards use two columns on wide workspaces; each card remains an independent
    layout so expanded accounts and long subscription content do not stretch its sibling. */

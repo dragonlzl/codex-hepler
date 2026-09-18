@@ -125,6 +125,8 @@
           <label>二次验证码<input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="身份验证器中的 6 位验证码" required /></label>
         </fieldset>
         <p class="monitor-auth-help">密码仅用于本次登录，不会保存。授权自动保存在本机，到期后在这里重新登录即可。</p>
+        <section id="monitor-projected-login" aria-label="派大星官网登录画面" hidden></section>
+        <p id="monitor-browser-fallback" hidden><button type="button">改用独立 Chrome 窗口登录</button></p>
         <details class="monitor-auth-advanced">
           <summary id="monitor-auth-manual-title">无法登录？使用 auth_token 授权</summary>
           <ol id="monitor-token-steps">
@@ -177,9 +179,11 @@
     </dialog>
     <script src="/route-groups.js" defer></script>
     <script src="/packy-login.js" defer></script>
+    <script src="/projected-login.js" defer></script>
     <script src="/monitor-auth.js" defer></script>
     <script src="/packy-balance.js" defer></script>
     <script src="/timicc-status.js" defer></script>
+    <script src="/aigo-status.js" defer></script>
     <script src="/availability.js" defer></script>
     <script src="/account-bindings.js" defer></script>
     <script src="/app.js" defer></script>

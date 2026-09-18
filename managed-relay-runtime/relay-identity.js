@@ -8,6 +8,7 @@ const MERCHANT_HOSTS = {
   krill: ['krill-code.com', 'www.krill-code.com', 'api-slb.krill-code.net', 'api.cdn-krill-ai.com'],
   rightcode: ['rightapi.ai', 'www.rightapi.ai'],
   timicc: ['timicc.com', 'www.timicc.com'],
+  aigo: ['api.aigo0.com'],
 };
 
 function merchantId(baseurl) {

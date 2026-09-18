@@ -13,19 +13,26 @@ class MonitorAuthorization {
     this.onAuthorized = onAuthorized;
     this.busy = false;
     this.challengeId = null;
+    this.browserLoginId = null;
+    this.browserController = null;
+    this.projection = new ProjectedLogin(document.querySelector('#monitor-projected-login'), this.dialog);
     this.site = 'blackaicoding';
     this.packyChallenge = new PackyLoginChallenge();
     this.form.addEventListener('submit', event => { event.preventDefault(); this.login(); });
+    document.querySelector('#monitor-browser-fallback button').addEventListener('click', () => { if (!this.busy) this.loginInBrowser('window'); });
     this.tokenSubmit.addEventListener('click', () => this.authorizeToken());
     this.form.elements.token.addEventListener('keydown', event => {
       if (event.key === 'Enter') { event.preventDefault(); this.authorizeToken(); }
     });
     document.querySelector('#monitor-auth-clear').addEventListener('click', () => this.clear());
-    document.querySelector('#monitor-auth-cancel').addEventListener('click', () => { if (!this.busy) this.dialog.close(); });
+    document.querySelector('#monitor-auth-cancel').addEventListener('click', () => {
+      if (this.browserController) { this.cancelBrowserLogin(); this.dialog.close(); }
+      else if (!this.busy) this.dialog.close();
+    });
     this.back.addEventListener('click', () => { this.cancelChallenge(); this.render(); this.form.elements.username.focus(); });
-    this.dialog.addEventListener('cancel', event => { if (this.busy) event.preventDefault(); });
-    this.dialog.addEventListener('close', () => { this.form.reset(); this.cancelChallenge(); this.render(); });
-    window.addEventListener('pagehide', () => { this.form.reset(); this.cancelChallenge(); this.packyChallenge.cancel?.(); this.hideToast(); });
+    this.dialog.addEventListener('cancel', event => { if (this.browserController) this.cancelBrowserLogin(); else if (this.busy) event.preventDefault(); });
+    this.dialog.addEventListener('close', () => { this.form.reset(); this.cancelChallenge(); this.cancelBrowserLogin(); this.render(); });
+    window.addEventListener('pagehide', () => { this.form.reset(); this.cancelChallenge(); this.cancelBrowserLogin(); this.packyChallenge.cancel?.(); this.hideToast(); });
   }
 
   open(site = 'blackaicoding', name, accountId) {
@@ -38,6 +45,7 @@ class MonitorAuthorization {
       krill: { name: 'Krill', origin: 'https://www.krill-code.com', credentialName: 'krill_jwt', description: '自动读取个人账号余额、套餐状态和近 7 天用量。公开可用性无需登录。' },
       rightcode: { name: 'RC', origin: 'https://www.rightapi.ai', credentialName: 'userToken', description: '自动读取控制台当前余额，每 15 秒随检测刷新。Codex 模型可用性无需登录。' },
       timicc: { name: 'timiCC', origin: 'https://timicc.com', description: '自动读取当前余额，每 15 秒随检测刷新。两个 Codex 号池的公开状态无需登录。' },
+      aigo: { name: '派大星', origin: 'https://api.aigo0.com', credentialName: 'auth_token', browser: true, description: '点击「在此页面登录」，在官网实时画面中确认条款、输入账号密码并完成人机验证。成功后自动保存授权，无需复制令牌。' },
     };
     if (!Object.hasOwn(sites, site)) return;
     this.hideToast();
@@ -48,10 +56,12 @@ class MonitorAuthorization {
     this.name = name;
     this.accountId = accountId;
     const settings = sites[site];
+    this.browserOnly = Boolean(settings.browser);
+    document.querySelector('#monitor-browser-fallback').hidden = !this.browserOnly;
     document.querySelector('#monitor-auth-title').textContent = settings.name + ' · ' + (name || '账号授权');
     document.querySelector('#monitor-auth-description').textContent = '使用 ' + settings.name + ' 账号登录，' + settings.description + ' 本次授权供该账号及设为同一账号的绑定配置共用，重新登录或清除授权会作用于整个共用账号。';
     const link = document.querySelector('#monitor-auth-site');
-    link.href = settings.origin + (site === 'rightcode' ? '/dashboard' : site === 'timicc' ? '/usage' : '/'); link.textContent = settings.name;
+    link.href = settings.origin + (site === 'rightcode' ? '/dashboard' : site === 'timicc' ? '/usage' : site === 'aigo' ? '/monitor' : '/'); link.textContent = settings.name;
     document.querySelector('#monitor-auth-origin').textContent = settings.origin;
     this.form.elements.username.placeholder = settings.name + ' 账号或邮箱';
     const session = ['aixor', 'packycode'].includes(site);
@@ -67,9 +77,9 @@ class MonitorAuthorization {
     this.tokenSubmit.textContent = session ? '验证并保存会话' : '验证并保存 ' + this.credentialName;
     this.requiresAgreement = ['aixor', 'timicc'].includes(site);
     document.querySelector('#monitor-auth-agreement').hidden = !this.requiresAgreement;
-    document.querySelector('#monitor-agreement-links').innerHTML = site === 'timicc'
+    document.querySelector('#monitor-agreement-links').innerHTML = ['timicc', 'aigo'].includes(site)
       ? [['terms', '服务条款'], ['usage-policy', '使用政策'], ['supported-regions', '支持的国家和地区'], ['service-specific-terms', '隐私政策']]
-        .map(([path, label]) => '<a href="https://timicc.com/legal/' + path + '" target="_blank" rel="noreferrer">' + label + '</a>').join('、')
+        .map(([path, label]) => '<a href="' + settings.origin + '/legal/' + path + '" target="_blank" rel="noreferrer">' + label + '</a>').join('、')
       : '<a href="' + settings.origin + '/user-agreement" target="_blank" rel="noreferrer">' + settings.name + ' 用户协议</a>';
     this.form.elements.agreement.required = this.requiresAgreement;
     const cookieLink = document.querySelector('#monitor-cookie-site');
@@ -82,18 +92,20 @@ class MonitorAuthorization {
     this.feedback.textContent = '';
     this.render();
     this.dialog.showModal();
-    this.form.elements.username.focus();
+    if (this.browserOnly) this.submit.focus(); else this.form.elements.username.focus();
   }
 
   render() {
     const secondStep = Boolean(this.challengeId);
     for (const control of this.form.elements) control.disabled = this.busy;
-    this.loginFields.hidden = secondStep;
-    this.loginFields.disabled = this.busy || secondStep;
+    this.loginFields.hidden = secondStep || this.browserOnly;
+    this.loginFields.disabled = this.busy || secondStep || this.browserOnly;
     this.otpFields.hidden = !secondStep;
     this.otpFields.disabled = this.busy || !secondStep;
     this.back.hidden = !secondStep;
-    this.submit.textContent = secondStep ? '验证并授权' : '登录并授权';
+    this.submit.textContent = this.browserOnly ? '在此页面登录' : secondStep ? '验证并授权' : '登录并授权';
+    if (this.browserController) document.querySelector('#monitor-auth-cancel').disabled = false;
+    this.projection.enableControls();
     this.form.setAttribute('aria-busy', String(this.busy));
   }
 
@@ -171,6 +183,7 @@ class MonitorAuthorization {
 
   login() {
     if (this.busy) return;
+    if (this.browserOnly) { this.loginInBrowser(); return; }
     const fields = this.form.elements;
     const payload = this.challengeId ? { challengeId: this.challengeId, code: fields.code.value } : { username: fields.username.value, password: fields.password.value,
       ...(this.requiresAgreement ? { agreement: fields.agreement.checked } : {}) };
@@ -190,6 +203,40 @@ class MonitorAuthorization {
       }
       return this.send('/api/availability/login', payload);
     });
+  }
+
+  cancelBrowserLogin() {
+    this.projection.stop();
+    this.browserController?.abort();
+    const id = this.browserLoginId;
+    this.browserLoginId = null;
+    if (id) fetch('/api/availability/browser-login/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }), keepalive: true }).catch(() => {});
+  }
+
+  async loginInBrowser(presentation = 'embedded') {
+    const controller = new AbortController();
+    this.browserController = controller;
+    try {
+      await this.perform(presentation === 'embedded' ? '正在加载官网登录画面…' : '正在打开 Chrome 登录窗口…', async () => {
+        const started = await this.send('/api/availability/browser-login/start', { presentation, ...(presentation === 'embedded' ? { viewport: this.projection.dimensions() } : {}) });
+        this.browserLoginId = started.browserLoginId;
+        if (controller.signal.aborted) { this.cancelBrowserLogin(); throw new Error('已取消浏览器登录。'); }
+        this.feedback.textContent = started.message;
+        if (presentation === 'embedded') this.projection.start(this.browserLoginId, controller.signal);
+        for (;;) {
+          if (controller.signal.aborted) throw new Error('已取消浏览器登录。');
+          const result = await this.send('/api/availability/browser-login/status', { id: this.browserLoginId });
+          if (controller.signal.aborted) throw new Error('已取消浏览器登录。');
+          if (result.state === 'success') { this.browserLoginId = null; return result; }
+          if (result.state !== 'pending') throw new Error(result.message || '登录未完成，请重新登录。');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      });
+    } finally {
+      if (this.browserController === controller) {
+        this.cancelBrowserLogin(); this.browserController = null; this.render();
+      }
+    }
   }
 
   authorizeToken() {

@@ -1,5 +1,5 @@
 class RelayAvailability {
-  constructor({ list, select, getState, isDragging, onChange, mutateBalanceSource, mutateStatusMode }) {
+  constructor({ list, select, getState, isDragging, onChange, mutateBalanceSource, mutateStatusMode, mutateAigoStatusMode }) {
     Object.assign(this, { list, select, getState, isDragging, onChange });
     this.model = 'gpt-6-astra';
     this.rows = new Map();
@@ -10,8 +10,16 @@ class RelayAvailability {
     this.balancePoll = null;
     this.packy = new PackyBalanceControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateBalanceSource });
     this.timicc = new TimiccStatusControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateStatusMode });
+    this.aigo = new AigoStatusControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateStatusMode: mutateAigoStatusMode });
+    this.expandedChannels = new Set();
+    try {
+      const saved = JSON.parse(localStorage.getItem('relay-aigo-expanded-pools') || '[]');
+      if (Array.isArray(saved)) saved.forEach(key => this.expandedChannels.add(String(key)));
+    } catch { /* Browser storage may be disabled. */ }
     const authorization = new MonitorAuthorization(async () => { this.reset(); await this.refresh(); });
     list.addEventListener('click', event => {
+      const toggle = event.target.closest('.aigo-channels-toggle');
+      if (toggle) { this.toggleAigoChannels(toggle.dataset.name); return; }
       const button = event.target.closest('.monitor-auth-button');
       if (!button) return;
       const account = button.closest('.provider-account');
@@ -35,6 +43,15 @@ class RelayAvailability {
     window.addEventListener('pagehide', () => { this.cancel(); clearInterval(this.timer); clearTimeout(this.balancePoll); this.timer = null; this.balancePoll = null; });
     window.addEventListener('pageshow', () => { this.start(); this.refresh(); });
     this.start();
+  }
+
+  aigoExpansionKey(name) { return JSON.stringify([this.getState().home || '', name]); }
+
+  toggleAigoChannels(name) {
+    const key = this.aigoExpansionKey(name);
+    if (this.expandedChannels.has(key)) this.expandedChannels.delete(key); else this.expandedChannels.add(key);
+    try { localStorage.setItem('relay-aigo-expanded-pools', JSON.stringify([...this.expandedChannels])); } catch { /* Optional preference. */ }
+    this.paint();
   }
 
   start() { this.timer ??= setInterval(() => this.refresh(), 15000); }
@@ -128,13 +145,15 @@ class RelayAvailability {
     };
     for (const target of this.list.querySelectorAll('.provider-availability, .account-availability')) {
       const status = statusFor(target.dataset.name);
-      const html = !state.availabilityAvailable ? '<span class="availability-empty">可用性展示需重启管理服务</span>' : this.markup(status);
+      const html = !state.availabilityAvailable ? '<span class="availability-empty">可用性展示需重启管理服务</span>' : this.markup(status, target.dataset.name);
       if (target.innerHTML !== html) target.innerHTML = html;
     }
     for (const account of this.list.querySelectorAll('.provider-account')) {
       const status = statusFor(account.dataset.name);
       const modeControl = account.querySelector('.account-status-mode');
       if (modeControl) this.timicc.paint(modeControl, account.dataset.name);
+      const aigoModeControl = account.querySelector('.aigo-status-mode');
+      if (aigoModeControl) this.aigo.paint(aigoModeControl, account.dataset.name);
       const sourceControl = account.querySelector('.account-balance-source');
       if (sourceControl) this.packy.paintSource(sourceControl, account.dataset.name, status);
       const auth = account.querySelector('.account-auth');
@@ -161,9 +180,15 @@ class RelayAvailability {
     this.onChange?.();
   }
 
-  markup(status) {
-    if (Array.isArray(status?.channels)) return '<div class="availability-channels"><p class="availability-model-note">' + escapeHtml(status.modelNote || '') + '</p>' +
-      status.channels.map(channel => '<section class="availability-channel" aria-label="' + escapeHtml(channel.groupLabel) + '">' + this.markup({ ...channel, source: status.source }) + '</section>').join('') + '</div>';
+  markup(status, entryName = '') {
+    if (Array.isArray(status?.channels)) {
+      const collapsible = Boolean(status.collapsibleChannels && status.channels.length > 2);
+      const expanded = collapsible && this.expandedChannels.has(this.aigoExpansionKey(entryName));
+      const channels = collapsible && !expanded ? status.channels.slice(0, 2) : status.channels;
+      const toggle = collapsible ? '<button type="button" class="aigo-channels-toggle" data-name="' + escapeHtml(entryName) + '" aria-expanded="' + expanded + '">' + (expanded ? '收起号池' : '展开全部号池') + '（' + status.channels.length + '）</button>' : '';
+      return '<div class="availability-channels"><p class="availability-model-note">' + escapeHtml(status.modelNote || '') + '</p>' + toggle +
+        '<div class="availability-channel-grid">' + channels.map(channel => '<section class="availability-channel" aria-label="' + escapeHtml(channel.groupLabel) + '">' + this.markup({ ...channel, source: status.source }, entryName) + '</section>').join('') + '</div></div>';
+    }
     if (status?.state === 'unsupported') return '<span class="availability-empty">可用性 · 站点未适配</span>';
     const stale = this.error || ['stale', 'auth-required'].includes(status?.state);
     const message = this.error ? (status?.history?.length ? '刷新失败，保留上次样本' : this.error) : status?.message || '正在读取状态';
