@@ -56,9 +56,9 @@ function readBlackaicodingStatus(payload, models) {
     const status = {
       groupLabel: GROUP_NAME, historyLength: count, historyLabel: '有数据时段',
       uptimeLabel: '90 分钟成功率', history: [], last: null, uptimePct: null, sampleCount: 0,
-      sampleTimeLabel: '统计截至', staleAfterMs: step + 180000,
+      sampleTimeLabel: '统计截至', staleAfterMs: step + 180000, sampleIntervalMs: step,
       noDataMessage: '样本不足，整体健康度未知',
-      ...(fallback && row ? { sourceModelLabel: 'OpenAI · 其他模型（参考）',
+      ...(fallback && row ? { referenceOnly: true, sourceModelLabel: 'OpenAI · 其他模型（参考）',
         modelNote: '源站未单列 gpt-6-astra；此处为“其他模型”混合统计，不能代表 gpt6 独立可用性。' } : {}),
     };
     result[model] = status;

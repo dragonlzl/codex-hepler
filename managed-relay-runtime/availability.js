@@ -418,10 +418,11 @@ class Availability {
     return entry.pending;
   }
 
-  async snapshot(keys, model = MODELS[0]) {
+  async snapshot(keys, model = MODELS[0], options = {}) {
     if (!MODELS.includes(model)) throw problem('不支持的可用性模型。', 400);
     const authorizationVersion = this.authorizationVersion;
-    this.retainPackySources(keys);
+    this.retainPackySources(options.allKeys || keys);
+    if (options.automatic) keys = keys.map(entry => ['timicc', 'aigo'].includes(adapterFor(entry.baseurl)?.id) ? { ...entry, statusMode: 'api-key' } : entry);
     // Status belongs to a provider; balances and subscriptions belong to a key account.
     const monitors = new Map();
     const statusGroup = entry => entry.displayProviderId || providerId(entry.baseurl);
@@ -436,7 +437,9 @@ class Availability {
     const rows = await Promise.all(keys.map(async (routeEntry) => {
       const { name, baseurl, accountId, accountBindingId, accountSourceName, displayProviderId, balanceSource } = routeEntry;
       const adapter = adapterFor(baseurl);
-      const row = { name, baseurl, model, history: [], last: null, uptimePct: null };
+      const row = { name, baseurl, model, history: [], last: null, uptimePct: null,
+        sampleIntervalMs: ({ input: 60000, timicc: 300000, aigo: 300000, krill: 1200000,
+          aixor: 3600000, packycode: 3600000, rightcode: 3600000 })[adapter?.id] || null };
       if (!adapter) return { ...row, state: 'unsupported', message: '站点未适配' };
       const keyBalance = adapter.id === 'packycode' && balanceSource !== 'account';
       if (adapter.id === 'packycode') row.balanceSource = keyBalance ? 'api-key' : 'account';
@@ -475,7 +478,7 @@ class Availability {
       return { ...row, state: status.last.ok ? 'available' : 'unavailable', message: status.last.ok ? '可用' : '异常' };
     }));
     // An account change during a refresh must not return the previous account's balance.
-    if (authorizationVersion !== this.authorizationVersion) return this.snapshot(this.getEntries ? await this.getEntries() : keys, model);
+    if (authorizationVersion !== this.authorizationVersion) return this.snapshot(this.getEntries ? await this.getEntries() : keys, model, options);
     return { model, models: MODELS, refreshMs: REFRESH_MS, historyLength: HISTORY_LENGTH, rows };
   }
 

@@ -61,7 +61,7 @@ function readAixorSubscriptions(payload, now, model, dependencies) {
     const startsAt = seconds(sub.start_time, true);
     items.push({ id: sub.id, name: dependencies.plans?.[sub.plan_id] || '订阅 #' + sub.id,
       state: sub.status === 'active' ? (startsAt && startsAt > now ? 'pending' : 'active') : 'unknown', startsAt, expiresAt, currency: 'USD',
-      unlimitedLabel: '不限总额度', quotas: limit > 0 ? [{ period: 'total', limit, used, remaining: Math.max(0, limit - used),
+      unlimitedLabel: '不限总额度', ...(limit === 0 ? { unlimited: true } : {}), quotas: limit > 0 ? [{ period: 'total', limit, used, remaining: Math.max(0, limit - used),
         resetsAt: seconds(sub.next_reset_time, true), noReset: !sub.next_reset_time }] : [] });
   }
   if (new Set(items.map(item => item.id)).size !== items.length) throw new Error('Duplicate Aixor subscription');

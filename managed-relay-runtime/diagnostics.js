@@ -6,6 +6,7 @@ const FIELDS = new Set([
   'status', 'outcome', 'phase', 'outbound', 'outboundSource', 'proxyConnectStatus',
   'pacResult', 'errorCode', 'causeCodes', 'durationMs', 'upstreamStatus',
   'responseBytes', 'responseComplete', 'headersMs', 'reachable', 'route', 'source',
+  'previousProvider', 'switchReason', 'fundingSource',
 ]);
 
 class Diagnostics {

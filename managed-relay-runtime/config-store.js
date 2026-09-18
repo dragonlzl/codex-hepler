@@ -3,11 +3,15 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { accountId, providerId, merchantId } = require('./relay-identity');
 const { bindingModel, updateBindingsForEdit } = require('./account-bindings');
+const { defaults: autoDefaults, validateSettings: validateAutoSettings } = require('./auto-switch-policy');
 const { parseTOML, getStaticTOMLValue } = require('toml-eslint-parser');
 
 const problem = (message, status = 409) => Object.assign(new Error(message), { status });
 const jsonText = value => `${JSON.stringify(value, null, 2)}\n`;
 const sameUrl = (a, b) => typeof a === 'string' && typeof b === 'string' && a.replace(/\/$/, '') === b.replace(/\/$/, '');
+const fingerprint = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const autoRevision = (current, config) => fingerprint([current.state.autoSwitch || autoDefaults(), config.keys]);
+const autoGuard = (current, config) => fingerprint([current.stateText, current.info.text, config.keys]);
 
 async function readText(file, optional = false) {
   try { return await fs.readFile(file, 'utf8'); }
@@ -162,6 +166,9 @@ class ConfigStore {
       packyBalanceSourceAvailable: true,
       timiccStatusModeAvailable: true,
       aigoStatusModeAvailable: true,
+      autoSwitchSettings: current.state.autoSwitch || autoDefaults(),
+      autoSwitchRevision: autoRevision(current, config),
+      autoSwitchGuard: autoGuard(current, config),
       keys: ordered.map(entry => ({ name: entry.name, baseurl: entry.baseurl, providerId: providerId(entry.baseurl), ...bindings.describe(entry),
         ...(merchantId(entry.baseurl) === 'packycode' ? { balanceSource: packyBalanceSource(current.state, entry.name) } : {}),
         ...(merchantId(entry.baseurl) === 'timicc' ? { statusMode: timiccStatusMode(current.state, entry.name) } : {}),
@@ -175,6 +182,45 @@ class ConfigStore {
     const entry = config.keys.find(entry => entry.name === name);
     if (!entry) throw problem('指定的中转站不存在，请重新选择。', 400);
     return this.validateRoute(entry);
+  }
+
+  saveAutoSwitch(payload) {
+    return this.serialize(async () => {
+      const current = await this.read(), { config } = await this.keys();
+      if (payload.revision !== autoRevision(current, config)) throw problem('自动切换设置或中转列表已变化，请重新打开设置。');
+      const settings = validateAutoSettings(payload.settings, config.keys.map(entry => ({ ...entry, merchantId: merchantId(entry.baseurl) })));
+      if (settings.enabled && !current.proxyInstalled) throw problem('请先接入本地代理，再开启自动切换。');
+      await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state, autoSwitch: settings }) }]);
+      return { message: settings.enabled ? '自动切换已开启，后台将持续检测。' : '自动切换已关闭，保留当前路由。' };
+    });
+  }
+
+  toggleAutoSwitch(enabled, revision) {
+    return this.serialize(async () => {
+      if (typeof enabled !== 'boolean') throw problem('开关值无效。', 400);
+      const current = await this.read(), { config } = await this.keys();
+      if (enabled && revision !== autoRevision(current, config)) throw problem('设置已变化，请刷新后再开启。');
+      const settings = { ...(current.state.autoSwitch || autoDefaults()), enabled };
+      if (enabled) {
+        validateAutoSettings(settings, config.keys.map(entry => ({ ...entry, merchantId: merchantId(entry.baseurl) })));
+        if (!current.proxyInstalled) throw problem('请先接入本地代理，再开启自动切换。');
+      }
+      await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state, autoSwitch: settings }) }]);
+      return { message: enabled ? '自动切换已开启。' : '自动切换已关闭，保留当前路由。' };
+    });
+  }
+
+  selectAutomatic(name, expectedGuard, valid) {
+    return this.serialize(async () => {
+      const current = await this.read(), { config } = await this.keys();
+      // Recheck after acquiring the shared write queue: off/manual edits win over stale observations.
+      if (!valid() || !current.proxyInstalled || !current.state.autoSwitch?.enabled || autoGuard(current, config) !== expectedGuard) return false;
+      if (!current.state.autoSwitch.pool.some(item => item.name === name)) return false;
+      const entry = await this.entry(name);
+      if (!valid() || current.state.activeName === entry.name) return false;
+      await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state, activeName: entry.name }) }]);
+      return true;
+    });
   }
 
   validateRoute(entry) {
@@ -231,8 +277,9 @@ class ConfigStore {
       const entry = await this.entry(name);
       const current = await this.read();
       if (mode === 'proxy') {
-        await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state, version: 2, activeName: entry.name }) }]);
-        return { restartRequired: !current.proxyInstalled, message: current.proxyInstalled ? `后续代理请求将使用「${entry.name}」。` : `已选择「${entry.name}」，尚未接入 Codex。` };
+        const autoSwitch = current.state.autoSwitch?.enabled ? { ...current.state.autoSwitch, enabled: false } : current.state.autoSwitch;
+        await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state, version: 2, activeName: entry.name, ...(autoSwitch ? { autoSwitch } : {}) }) }]);
+        return { restartRequired: !current.proxyInstalled, message: (current.proxyInstalled ? `后续代理请求将使用「${entry.name}」。` : `已选择「${entry.name}」，尚未接入 Codex。`) + (current.state.autoSwitch?.enabled ? '手动选择已关闭自动切换。' : '') };
       }
       if (current.proxyInstalled) throw problem('请先切回直接配置，再选择直连中转站。');
       const provider = current.info.provider;
@@ -277,7 +324,10 @@ class ConfigStore {
       if (session?.version !== 1 || session.providerId !== current.info.id || sameUrl(session.baseUrl, this.proxyUrl)) throw problem('没有本次接入前的恢复记录，不能自动恢复。请保留或手动恢复你自己的配置。');
       // Restore exact bytes when possible; preserve unrelated edits made since installation.
       const restored = current.info.text === session.configApplied ? session.configBefore : patchBase(current.info, session.baseUrl, session.rawBaseValue);
-      await this.commit([{ file: this.configPath, before: current.info.text, after: restored }]);
+      const changes = [{ file: this.configPath, before: current.info.text, after: restored }];
+      if (current.state.autoSwitch?.enabled) changes.push({ file: this.statePath, before: current.stateText,
+        after: jsonText({ ...current.state, autoSwitch: { ...current.state.autoSwitch, enabled: false } }) });
+      await this.commit(changes);
       return { restartRequired: true, message: '已恢复本次接入前的直连配置，请完整重启 Codex。' };
     });
   }
@@ -311,6 +361,13 @@ class ConfigStore {
       config.keys[index] = { ...original, ...entry };
       const changes = [{ file: this.keysPath, before: raw, after: jsonText(config) }];
       const state = { ...current.state };
+      if (state.autoSwitch) {
+        const connectionChanged = entry.value !== original.value || !sameUrl(entry.baseurl, original.baseurl);
+        state.autoSwitch = { ...state.autoSwitch, pool: state.autoSwitch.pool
+          .filter(item => item.name !== originalName || !connectionChanged)
+          .map(item => item.name === originalName ? { ...item, name: entry.name } : item) };
+        if (!state.autoSwitch.pool.length) state.autoSwitch.enabled = false;
+      }
       if (Object.hasOwn(state.packyBalanceSources || {}, originalName)) {
         state.packyBalanceSources = { ...state.packyBalanceSources };
         delete state.packyBalanceSources[originalName];

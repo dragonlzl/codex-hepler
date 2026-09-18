@@ -7,6 +7,7 @@ const { createProxy } = require('./managed-relay-runtime/proxy');
 const { Outbound } = require('./managed-relay-runtime/outbound');
 const { Diagnostics } = require('./managed-relay-runtime/diagnostics');
 const { Availability } = require('./managed-relay-runtime/availability');
+const { AutoSwitch } = require('./managed-relay-runtime/auto-switch');
 const { networkAccessError } = require('./managed-relay-runtime/network-error');
 const { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
 const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
@@ -69,9 +70,15 @@ async function start(options = {}) {
   const build = (target, injected) => {
     const store = new ConfigStore(target, 'http://127.0.0.1:' + proxyPort + '/v1');
     const outbound = injected || new Outbound(target, { localPorts: [proxyPort, uiPort] });
-    return { store, outbound, diagnostics: new Diagnostics(target), availability: new Availability(outbound, {
+    const diagnostics = new Diagnostics(target);
+    const availability = new Availability(outbound, {
       ...options.availabilityOptions, home: target, getEntry: name => store.entry(name), getEntries: async () => (await store.status()).keys,
-    }) };
+    });
+    const autoSwitch = new AutoSwitch(store, availability, { ...options.autoSwitchOptions, record: event => {
+      const safe = diagnostics.record(event);
+      (options.log || console.log)(JSON.stringify(safe));
+    } });
+    return { store, outbound, diagnostics, availability, autoSwitch };
   };
   // holder 的字段会被原地替换；下面的 facade 让代理与请求处理器始终读到当前目录的对象。
   const holder = { home: initialHome, ...build(initialHome, options.outbound) };
@@ -86,6 +93,7 @@ async function start(options = {}) {
   const outbound = live('outbound');
   const diagnostics = live('diagnostics');
   const availability = live('availability');
+  const autoSwitch = live('autoSwitch');
   const record = entry => {
     const safe = diagnostics.record(entry);
     (options.log || console.log)(JSON.stringify(safe));
@@ -96,6 +104,7 @@ async function start(options = {}) {
   const proxy = createProxy(store, entry => {
     lastRequest = entry;
     record({ event: 'relay_request', ...entry });
+    autoSwitch.observe(entry);
   }, options.timeoutMs, outbound, options.connectTimeoutMs, entry => record({ event: 'relay_request_started', ...entry }));
   const lockReason = '当前目录由环境变量或启动参数指定，不能在页面修改。';
   const status = async () => {
@@ -105,6 +114,7 @@ async function start(options = {}) {
       homeSource, homeLocked, settingsPath: displayPath(settingsFile),
       configPath: displayPath(paths.configFile), codexAppPath: appPath || null, appPathSource, appPathLocked,
       launch: await launcher.snapshot(),
+      autoSwitch: autoSwitch.snapshot(),
       lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, accountGroupingAvailable: true, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
@@ -123,18 +133,21 @@ async function start(options = {}) {
       const fromConfig = homeSource === 'config';
       if (fromConfig) await writeConfigHome(paths.configFile, resolved);
       else await writeSettings({ home: resolved });
-      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics, availability: holder.availability };
+      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics, availability: holder.availability, autoSwitch: holder.autoSwitch };
+      previous.autoSwitch.stop();
       Object.assign(holder, { home: resolved, ...next });
       next = null;
       homeSource = fromConfig ? 'config' : 'saved';
       await previous.availability.close();
+      await previous.autoSwitch.close();
+      holder.autoSwitch.start();
       previous.outbound.close();
       await previous.diagnostics.close();
       lastRequest = null;
       lastDiagnostic = null;
       return { message: `已切换到 ${resolved}，已保存到${fromConfig ? ' JSON 配置文件' : '目录设置'}${created ? '，并创建了空的 key_config.json' : ''}。` };
     } finally {
-      if (next) { await next.availability.close(); next.outbound.close(); await next.diagnostics.close(); }
+      if (next) { next.autoSwitch.stop(); await next.availability.close(); await next.autoSwitch.close(); next.outbound.close(); await next.diagnostics.close(); }
       savingPaths = false;
     }
   };
@@ -193,7 +206,13 @@ async function start(options = {}) {
           json(res, 200, result); return;
         }
         let result;
-        if (url.pathname === '/api/select') result = await store.select(payload.name, payload.mode);
+        const autoMutation = ['/api/select', '/api/proxy/install', '/api/proxy/restore', '/api/keys/edit', '/api/accounts/bind', '/api/accounts/unbind',
+          '/api/network', '/api/availability/authorization', '/api/availability/login', '/api/packycode/balance/source',
+          '/api/auto-switch/settings', '/api/auto-switch/toggle'].includes(url.pathname);
+        if (autoMutation) autoSwitch.invalidate();
+        if (url.pathname === '/api/auto-switch/settings') result = await store.saveAutoSwitch(payload);
+        else if (url.pathname === '/api/auto-switch/toggle') result = await store.toggleAutoSwitch(payload.enabled, payload.revision);
+        else if (url.pathname === '/api/select') result = await store.select(payload.name, payload.mode);
         else if (url.pathname === '/api/proxy/install') result = await store.install(payload.name);
         else if (url.pathname === '/api/proxy/restore') result = await store.restore();
         else if (url.pathname === '/api/keys') result = await store.add(payload);
@@ -220,11 +239,20 @@ async function start(options = {}) {
         else if (url.pathname === '/api/home') result = await switchHome(payload.home);
         else if (url.pathname === '/api/app-path') result = await switchAppPath(payload.appPath);
         else throw problem('接口不存在。', 404);
+        if (autoMutation) autoSwitch.tick();
         json(res, 200, { ...result, status: await status() });
         return;
       }
       if (req.method !== 'GET') throw problem('方法不允许。', 405);
       if (url.pathname === '/api/status') { json(res, 200, await status()); return; }
+      if (url.pathname === '/api/auto-switch/options') {
+        const current = holder, state = await current.store.status();
+        const snapshot = await current.availability.snapshot(state.keys, state.autoSwitchSettings.model);
+        json(res, 200, { revision: state.autoSwitchRevision, settings: state.autoSwitchSettings, keys: state.keys,
+          plans: snapshot.rows.map(row => ({ name: row.name, state: row.subscriptions?.state || 'unsupported',
+            items: (row.subscriptions?.items || []).map(item => ({ id: item.id, name: item.name, state: item.state, currency: item.currency })) })) });
+        return;
+      }
       if (url.pathname === '/api/packycode/balance/settings') { json(res, 200, { settings: await availability.packyBalance.settings() }); return; }
       if (url.pathname === '/api/availability/login/options') { json(res, 200, await availability.loginOptions(url.searchParams.get('site'))); return; }
       if (url.pathname === '/api/availability') {
@@ -255,8 +283,11 @@ async function start(options = {}) {
     boundPorts = [proxy.address().port, ui.address().port];
     outbound.localPorts.add(proxy.address().port);
     outbound.localPorts.add(ui.address().port);
-  } catch (error) { await availability.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
-  return { uiUrl, proxyUrl: store.proxyUrl, store, outbound, status, close: async () => { await availability.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close(); } };
+    autoSwitch.start();
+  } catch (error) { autoSwitch.stop(); await availability.close(); await autoSwitch.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
+  return { uiUrl, proxyUrl: store.proxyUrl, store, outbound, status, autoSwitch, close: async () => {
+    autoSwitch.stop(); await availability.close(); await autoSwitch.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close();
+  } };
 }
 
 if (require.main === module) {

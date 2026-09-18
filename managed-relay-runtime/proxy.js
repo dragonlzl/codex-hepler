@@ -2,6 +2,7 @@ const http = require('node:http');
 const https = require('node:https');
 const { randomUUID } = require('node:crypto');
 const { safeError } = require('./outbound');
+const { accountId } = require('./relay-identity');
 
 function cleanHeaders(headers) {
   const cleaned = { ...headers };
@@ -55,6 +56,7 @@ function createProxy(store, observe = () => {}, timeoutMs = 120000, outbound, co
       observe({ ...context, at: new Date().toISOString(), status: error.status || 503, outcome: 'failed', phase: 'configuration', ...safeError(error), durationMs: Date.now() - started });
       sendError(res, error.status || 503, error.message); return;
     }
+    context.routeId = accountId(entry);
     const target = targetUrl(entry.baseurl, req.url);
     let route;
     try { route = outbound ? await outbound.resolve(target) : { label: 'DIRECT', source: 'direct', proxyUrl: '' }; }
@@ -139,15 +141,17 @@ function createProxy(store, observe = () => {}, timeoutMs = 120000, outbound, co
     (async () => {
       const context = received(req);
       const entry = await store.activeEntry();
+      context.routeId = accountId(entry);
       const target = targetUrl(entry.baseurl, req.url);
       const route = outbound ? await outbound.resolve(target) : { label: 'DIRECT', source: 'direct', proxyUrl: '' };
       if (socket.destroyed) return;
       const started = Date.now();
       let reported = false;
+      let upstreamStatus;
       const report = (status, outcome, error) => {
         if (reported) return;
         reported = true;
-        observe({ ...context, provider: entry.name, at: new Date().toISOString(), status, outcome, phase: 'websocket', outbound: route.label, outboundSource: route.source, ...(error ? safeError(error) : {}), durationMs: Date.now() - started });
+        observe({ ...context, provider: entry.name, at: new Date().toISOString(), status, upstreamStatus, outcome, phase: 'websocket', outbound: route.label, outboundSource: route.source, ...(error ? safeError(error) : {}), durationMs: Date.now() - started });
       };
       const headers = cleanHeaders(req.headers);
       Object.assign(headers, { host: target.host, authorization: `Bearer ${entry.value}`, connection: 'Upgrade', upgrade: 'websocket' });
@@ -160,8 +164,9 @@ function createProxy(store, observe = () => {}, timeoutMs = 120000, outbound, co
       upstream.on('error', error => { clearTimeout(timer); report(502, 'failed', error); socket.destroy(); });
       upstream.setTimeout(timeoutMs, () => upstream.destroy(Object.assign(new Error('upstream idle timeout'), { code: 'UPSTREAM_IDLE_TIMEOUT' })));
       socket.on('close', () => { clearTimeout(timer); report(499, 'cancelled', { code: 'CLIENT_DISCONNECTED' }); controller.abort(); upstream.destroy(); });
-      upstream.on('response', response => { clearTimeout(timer); report(response.statusCode, 'failed', { code: 'UPGRADE_REJECTED' }); response.resume(); socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n'); });
+      upstream.on('response', response => { clearTimeout(timer); upstreamStatus = response.statusCode; report(response.statusCode, 'failed', { code: 'UPGRADE_REJECTED' }); response.resume(); socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n'); });
       upstream.on('upgrade', (response, upstreamSocket, upstreamHead) => {
+        upstreamStatus = response.statusCode;
         clearTimeout(timer);
         upstreamSocket.on('error', () => socket.destroy());
         upstreamSocket.on('close', () => socket.destroy());

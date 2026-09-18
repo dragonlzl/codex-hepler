@@ -35,7 +35,11 @@ function readInputSubscriptions(payload, now = Date.now()) {
       return { period, limit, used, remaining: limit > 0 && used !== null ? Math.max(0, limit - used) : null,
         resetsAt, endsWithSubscription };
     }).filter(quota => quota.limit > 0);
-    return { id: item.id, name: group.name, state, startsAt, expiresAt, quotas, currency: 'USD' };
+    const limits = ['daily', 'weekly', 'monthly'].map(period => group[period + '_limit_usd']);
+    const quotaUnknown = limits.some(value => value === null);
+    const unlimited = !quotaUnknown && !quotas.length && limits.some(value => value === 0);
+    return { id: item.id, name: group.name, state, startsAt, expiresAt, quotas, currency: 'USD',
+      ...(unlimited ? { unlimited: true } : {}), ...(quotaUnknown ? { quotaUnknown: true } : {}) };
   });
   if (new Set(items.map(item => item.id)).size !== items.length) throw new Error('Duplicate subscription');
   return { items };

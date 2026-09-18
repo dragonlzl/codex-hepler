@@ -48,6 +48,25 @@ let appPathDirty = false;
 let launchBusy = false;
 let cliCwdInitialized = false;
 const cliCwd = document.querySelector('#cli-cwd');
+const cliCwdHelp = document.querySelector('#cli-cwd-help');
+const cliCwdStorageKey = 'relay-cli-cwd';
+try {
+  const saved = localStorage.getItem(cliCwdStorageKey);
+  if (saved?.trim()) { cliCwd.value = saved; cliCwdInitialized = true; }
+} catch {
+  cliCwdHelp.textContent = '浏览器存储不可用，工作目录只能在本次页面中保留。';
+}
+cliCwd.addEventListener('input', () => {
+  // Protect edits made before the first status response from default backfill.
+  cliCwdInitialized = true;
+  try {
+    if (cliCwd.value.trim()) localStorage.setItem(cliCwdStorageKey, cliCwd.value);
+    else localStorage.removeItem(cliCwdStorageKey);
+    cliCwdHelp.textContent = cliCwd.value.trim() ? '工作目录已保存到当前浏览器，刷新后保留。' : '已清除保存的目录，下次打开使用默认目录。';
+  } catch {
+    cliCwdHelp.textContent = '浏览器存储不可用，工作目录只能在本次页面中保留。';
+  }
+});
 const launchFeedback = document.querySelector('#launch-feedback');
 const availability = new RelayAvailability({
   list: routesPanel, select: document.querySelector('#availability-model'), getState: () => state, isDragging: () => Boolean(draggedName), onChange: applyAvailabilityFilter,
@@ -348,6 +367,16 @@ function applyAvailabilityFilter() {
   if (description.textContent !== detail) description.textContent = detail;
 }
 
+const automatic = new AutoSwitchControls({ getState: () => state, request: api, mutate: async (endpoint, payload) => {
+  if (busy || networkBusy || launchBusy) throw new Error('请等待当前操作完成。');
+  busy = true; mutationVersion++; renderControls();
+  try {
+    const data = await api(endpoint, payload);
+    Object.assign(state, data.status); loaded = true; render();
+    return data;
+  } finally { busy = false; renderControls(); }
+} });
+
 function render() {
   const groups = RelayGroups.group(state.keys);
   document.querySelector('#nav-count').textContent = groups.length;
@@ -374,6 +403,7 @@ function render() {
   if (markup !== renderedList && !draggedName) { list.innerHTML = markup; renderedList = markup; }
   renderControls();
   availability.sync();
+  automatic.sync();
 }
 
 async function api(endpoint, payload) {

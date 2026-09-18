@@ -27,13 +27,23 @@
           <section id="page-routes" class="page" aria-labelledby="routes-title">
             <div class="page-heading"><div><p class="kicker">YOUR RELAY WORKSPACE</p><h1 id="routes-title">中转站</h1><p>管理线路、查看状态，找到合适的请求入口。</p></div><button id="add-open" class="primary" type="button"><span aria-hidden="true">＋</span> 新增中转</button></div>
             <section id="current-route" class="current-route" aria-label="当前使用"><span class="current-dot" aria-hidden="true"></span><span class="current-route-label">当前使用</span><button id="current-route-name" type="button" disabled>正在读取…</button><span id="current-route-mode" class="mode-tag"></span><a href="#connection" class="text-link">连接设置 ↗</a></section>
+            <div class="route-controls">
+            <section class="auto-panel" aria-labelledby="auto-title">
+              <div class="auto-heading"><div><h2 id="auto-title">自动切换</h2><p>中转商优先 · 先绿色，再优先级 · 故障持续 3 分钟后换站</p></div><label class="auto-toggle"><input id="auto-enabled" type="checkbox" role="switch" disabled /><span>开启自动切换</span></label></div>
+              <div class="auto-summary"><p id="auto-status" role="status" aria-live="polite">正在读取设置…</p><button id="auto-settings-open" type="button" disabled>设置优先级池</button></div>
+              <p id="auto-last-switch" class="auto-help"></p>
+              <details id="auto-candidates"><summary>候选资格与排除原因</summary><ul id="auto-candidate-list"></ul></details>
+              <p id="auto-feedback" class="auto-help" role="status" aria-live="polite"></p>
+            </section>
             <section class="launch-panel" aria-labelledby="launch-title">
               <div class="launch-heading"><div><h2 id="launch-title">启动 Codex</h2><p>接入本地代理后，从这里打开 App 或 CLI，后续换站无需重启。</p></div><button id="launch-app" class="secondary" type="button" data-launch="app" disabled>启动 Codex App</button></div>
-              <form id="launch-cli-form" class="path-form"><label>CLI 工作目录<input id="cli-cwd" type="text" autocomplete="off" spellcheck="false" placeholder="填写要使用的项目目录" required /></label><button id="launch-cli" class="secondary" type="submit" data-launch="cli" disabled>启动 Codex CLI</button></form>
+              <form id="launch-cli-form" class="path-form"><label>CLI 工作目录<input id="cli-cwd" type="text" autocomplete="off" spellcheck="false" placeholder="填写要使用的项目目录" aria-describedby="cli-cwd-help" required /></label><button id="launch-cli" class="secondary" type="submit" data-launch="cli" disabled>启动 Codex CLI</button></form>
+              <p id="cli-cwd-help">填写后自动保存到当前浏览器，刷新后保留。</p>
               <p class="launch-help">CLI 自动打开独立终端；macOS 优先使用 iTerm，未安装时使用 Terminal。App 已运行时会提示先退出。</p>
               <p id="launch-status" role="status" aria-live="polite">正在检查启动条件…</p>
               <p id="launch-feedback" role="status" aria-live="polite"></p>
             </section>
+            </div>
             <section id="routes-panel" aria-labelledby="list-title">
               <div class="list-toolbar"><div class="list-heading"><h2 id="list-title">中转列表</h2><span id="count" class="count">—</span></div><div class="list-filters"><label class="search-box"><span aria-hidden="true">⌕</span><input id="route-search" type="search" aria-label="搜索名称或地址" placeholder="搜索名称或地址" autocomplete="off" /></label><label class="model-filter">模型<select id="availability-model" disabled><option value="gpt-6-astra">gpt-6-astra</option><option value="gpt-5.6-sol">gpt-5.6-sol</option></select></label></div></div>
               <div class="list-help"><span>按中转商归组 · 拖动手柄排序</span><span>状态每 15 秒更新</span></div>
@@ -96,6 +106,23 @@
         <footer><span>Codex Relay</span><span>配置修改自动备份 · 密钥仅保存在本机</span></footer>
       </div>
     </div>
+    <dialog id="auto-settings-dialog" aria-labelledby="auto-settings-title">
+      <form id="auto-settings-form">
+        <div class="auto-heading"><h2 id="auto-settings-title">自动切换设置</h2><span class="mode-tag">中转商优先</span></div>
+        <p class="auto-help">只有加入池子的入口参与选择。同一中转商共用优先级，数字越小越优先；绿色候选始终先于黄色候选。</p>
+        <div class="auto-fields">
+          <label>检测模型<select name="model"><option value="gpt-6-astra">gpt-6-astra</option><option value="gpt-5.6-sol">gpt-5.6-sol</option></select></label>
+          <label>订阅保留额度 M（美元）<input name="subscriptionMinimum" type="number" min="0" max="1000000000000" step="any" required /></label>
+          <label>余额保留金额 N（美元）<input name="balanceMinimum" type="number" min="0" max="1000000000000" step="any" required /></label>
+        </div>
+        <p class="auto-help">M/N 为全局设置，低于才跳过，等于仍可使用。订阅满足 M 时优先使用该商的订阅入口，否则检查余额入口。未授权、授权过期或余额无法确认的入口自动排除。</p>
+        <p class="auto-help">请选择已在中转商处配置好扣费方式的 Key / 地址，并将订阅入口关联到它实际使用的套餐。本工具通过换入口切换扣费来源，不修改中转商后台设置。次数和积分额度无法换算美元时会跳过。</p>
+        <div id="auto-pool-editor"></div>
+        <p class="auto-help">检测模型应与实际调用模型一致，此处不会修改请求模型。恢复判断使用最近 3 分钟内的检测；单格超过 3 分钟时取最近一格。服务运行期间后台每 15 秒检查，关闭页面仍生效。手动换站会关闭自动切换。</p>
+        <p id="auto-settings-feedback" role="status" aria-live="polite"></p>
+        <div class="edit-actions"><button id="auto-settings-cancel" type="button">取消</button><button id="auto-settings-save" class="secondary" type="submit">保存设置</button></div>
+      </form>
+    </dialog>
     <dialog id="add-dialog" aria-labelledby="add-title">
       <form id="add-form"><p class="kicker">NEW ROUTE</p><h2 id="add-title">新增中转</h2><p class="dialog-description">相同 Base URL 的配置会自动归入同一个中转商。</p>
         <label>名称<input name="name" maxlength="2000" placeholder="例如：团队共享" autocomplete="off" required autofocus /></label>
@@ -193,6 +220,7 @@
     <script src="/aigo-status.js" defer></script>
     <script src="/availability.js" defer></script>
     <script src="/account-bindings.js" defer></script>
+    <script src="/auto-switch.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>
