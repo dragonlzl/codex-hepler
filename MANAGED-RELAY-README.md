@@ -108,7 +108,7 @@ Windows 接受 `/` 作为路径分隔符，推荐上述写法，包含空格也�
 
 页面“上游网络”控制的是本地转发服务访问中转站的方式，与“Codex 直连/接入本地代理”是两个独立设置。
 
-- 默认“自动跟随系统代理”：macOS 使用 SystemConfiguration 的只读接口读取当前 HTTP、HTTPS、SOCKS 或 PAC 设置，缓存最多 2 秒；没有启用系统代理时，读取 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY 与 NO_PROXY 环境变量。macOS 系统代理启用时，其设置及绕过规则优先。
+- 默认“自动跟随系统代理”：Windows 通过系统 API 只读获取当前用户的代理设置，macOS 使用 SystemConfiguration 的只读接口；两者均支持 HTTP、HTTPS、SOCKS、PAC 和绕过规则，缓存最多 2 秒。Windows 支持统一代理地址和按协议配置的地址，`https=主机:端口` 使用 HTTP CONNECT；`socks=主机:端口` 按 Windows 约定使用 SOCKS4，也可使用明确的 SOCKS5 URL。没有启用系统代理时，读取 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY 与 NO_PROXY 环境变量；已启用的系统代理及绕过规则优先。
 - FlyingBird-Lite 若在智能连接时公布系统代理或 PAC，工具通过这个入口转发；如果系统代理状态没有公布，工具会只读确认 FlyingBirdCore 正在运行且由它监听 `127.0.0.1:7892`，再自动使用该 mixed-port，由 FlyingBird 决定域名分流，不需要逐个中转标记。
 - “指定代理”：填写 VPN 客户端实际提供的 HTTP(S) 或 SOCKS 地址和端口。不要把本工具的 3211 或 3790 端口填作出站代理。界面不支持带账号密码的代理 URL。
 - “直连”：不显式使用 HTTP/SOCKS 代理；如果系统启用 TUN，流量仍受系统网络路由控制。
@@ -116,7 +116,9 @@ Windows 接受 `/` 作为路径分隔符，推荐上述写法，包含空格也�
 - “检查所选中转连接”只执行 GET /models，报告网络路径和 HTTP 状态，不发送模型生成请求。HTTP 200 表示收到成功响应，不代表模型推理必然成功。
 - 设置保存在 CODEX_HOME/relay-ui-runtime/network.json，不修改 FlyingBird 的配置、节点、开关、规则或 Codex 认证；FlyingBird 探测只执行 `pgrep`/`lsof` 只读检查。
 - 更改出站设置对新请求生效；已有 SSE/WebSocket 连接保持原路径。代理失败不会自动将模型请求切到直连重发。
-- 若仅启用 WPAD 自动发现且没有可用代理地址，显示明确错误，请手动指定 VPN 的代理入口。
+- macOS 若仅启用 WPAD 自动发现且没有可用代理地址，显示明确错误。Windows 默认的“自动检测设置”不会被视为已配置代理：未提供代理地址或 PAC 时仍按环境变量或直连处理；依赖 WPAD 的网络需指定实际代理入口或 PAC。
+
+Packycode 登录先由本地服务读取 `https://www.packyapi.com/api/status`，再按需读取人机验证配置，总超时为 10 秒；这个请求同样使用“上游网络”设置。提示“无法获取登录设置（请求超时）”表示尚未提交账号密码。官网、登录接口与模型 API 可能使用不同域名，模型接口可用并不代表登录接口可达。Windows/macOS 开启 VPN 后仍需确认它已提供系统代理、指定代理或 TUN 路由；仅开启浏览器代理扩展不会改变本地服务的出站路径。
 
 升级到带网络功能的版本需要重启本工具一次，以加载新增依赖和后端；之后保存出站设置或系统代理切换不需要重启 Codex。正在用本工具进行 Codex 对话时，请在当前回复结束后再停止/启动服务。
 

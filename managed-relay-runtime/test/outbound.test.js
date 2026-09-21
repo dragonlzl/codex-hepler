@@ -9,6 +9,7 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 const { Outbound, systemProxyFor, bypasses, safeError } = require('../outbound');
+const { windowsProxySettings } = require('../windows-proxy');
 const { createProxy } = require('../proxy');
 
 async function temp(t) {
@@ -100,7 +101,8 @@ test('manual settings persist separately; reject own ports; do not silently use 
   await assert.rejects(o.save({ mode: 'proxy', proxyUrl: 'http://secret:password@127.0.0.1:7892' }), /账号密码/);
   await o.save({ mode: 'proxy', proxyUrl: 'socks5h://127.0.0.1:7892' });
   assert.equal((await o.resolve('https://upstream.invalid')).source, 'manual');
-  assert.equal((await fs.stat(o.file)).mode & 0o777, 0o600);
+  assert.deepEqual(JSON.parse(await fs.readFile(o.file, 'utf8')), { mode: 'proxy', proxyUrl: 'socks5h://127.0.0.1:7892' });
+  if (process.platform !== 'win32') assert.equal((await fs.stat(o.file)).mode & 0o777, 0o600);
   await o.save({ mode: 'direct' });
   assert.equal((await o.resolve('https://upstream.invalid')).source, 'direct');
 });
@@ -163,6 +165,11 @@ test('HTTPS uses CONNECT and verifies TLS using the configured CA', async t => {
   assert.equal(response.body, 'tls-ok');
   assert.equal(connectHost, 'upstream.invalid:443');
   await assert.rejects(request('https://upstream.invalid/models', o.agent(route)), error => /CERT/.test(error.code));
+  o.readSystem = async () => windowsProxySettings({ ProxyServer: new URL(proxyUrl).host });
+  await o.save({ mode: 'auto' });
+  const windowsRoute = await o.resolve('https://upstream.invalid/models');
+  assert.equal(windowsRoute.source, 'system-https');
+  assert.equal((await request('https://upstream.invalid/models', o.agent(windowsRoute), { ca: cert })).body, 'tls-ok');
 });
 
 test('PAC smart rule is evaluated and routes an unresolvable host through its chosen proxy', async t => {

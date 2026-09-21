@@ -8,6 +8,7 @@ const { promisify } = require('node:util');
 const { ProxyAgent } = require('proxy-agent');
 const { getProxyForUrl } = require('proxy-from-env');
 const { atomicWrite, problem } = require('./config-store');
+const { readWindowsProxies } = require('./windows-proxy');
 
 const run = promisify(execFile);
 const SYSTEM_PROXY_SCRIPT = `ObjC.import('Foundation');
@@ -89,7 +90,8 @@ function systemProxyFor(target, settings) {
   if (typeof host !== 'string' || !host || !Number.isInteger(port) || port < 1 || port > 65535) throw problem('系统代理地址或端口无效。', 503);
   const hostPart = net.isIP(host) === 6 ? `[${host}]` : host;
   // macOS HTTPSProxy is an HTTP CONNECT proxy, not necessarily TLS to the proxy itself.
-  return { proxyUrl: `${kind === 'SOCKS' ? 'socks5h' : 'http'}://${hostPart}:${port}`, source: 'system-' + kind.toLowerCase() };
+  const protocol = settings[kind + 'Protocol'] || (kind === 'SOCKS' ? 'socks5h' : 'http');
+  return { proxyUrl: `${protocol}://${hostPart}:${port}`, source: 'system-' + kind.toLowerCase() };
 }
 
 function labelProxy(url) {
@@ -107,7 +109,7 @@ function safeError(error) {
 class Outbound {
   constructor(home, options = {}) {
     this.file = path.join(home, 'relay-ui-runtime', 'network.json');
-    this.readSystem = options.readSystem || readMacProxies;
+    this.readSystem = options.readSystem || (process.platform === 'win32' ? readWindowsProxies : readMacProxies);
     this.readFlyingBird = options.readFlyingBird || (() => detectFlyingBirdProxy(options.flyingbird));
     this.envProxy = options.envProxy || getProxyForUrl;
     this.clock = options.clock || Date.now;
