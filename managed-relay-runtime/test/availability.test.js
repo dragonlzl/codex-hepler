@@ -138,6 +138,14 @@ test('refresh failures expose classified causes, record safe diagnostics and cle
     failure = Object.assign(new Error('private-token'), { status: 429 }); now += REFRESH_MS;
     row = (await monitor.snapshot(keys)).rows[0];
     assert.equal(row.failure.code, 'HTTP_429'); assert.match(row.failure.message, /频率受限/);
+    for (const code of ['ERR_TLS_CERT_ALTNAME_INVALID', 'PACKY_DNS_FAILED', 'PACKY_DNS_TIMEOUT']) {
+      failure = Object.assign(new Error('private-token'), { code }); now += REFRESH_MS;
+      row = (await monitor.snapshot(keys)).rows[0];
+      assert.equal(row.failure.code, code);
+      assert.match(row.failure.message, /DNS|域名解析/);
+      assert.equal(events.at(-1).errorCode, code);
+      assert.ok(!JSON.stringify([row, events]).includes('private-token'));
+    }
     failure = null; now += REFRESH_MS;
     row = (await monitor.snapshot(keys)).rows[0];
     assert.equal(row.state, 'available'); assert.equal(row.failure, undefined);

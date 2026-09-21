@@ -132,7 +132,6 @@ class RelayAvailability {
     const next = new Map();
     for (const row of rows) {
       const key = JSON.stringify([row.name, row.baseurl]);
-      const previous = this.rows.get(key);
       if (!RelayAvailability.statusRefreshFailed(row)) {
         this.rowFailures.delete(key);
         next.set(key, { ...row, displayAt: now });
@@ -140,15 +139,8 @@ class RelayAvailability {
       }
       const attempts = (this.rowFailures.get(key) || 0) + 1;
       this.rowFailures.set(key, attempts);
-      if (attempts <= 3) {
-        // A failed monitor must not roll back freshly returned account resources.
-        const status = previous || { name: row.name, baseurl: row.baseurl, state: 'loading', message: '正在读取状态', displayAt: now };
-        next.set(key, { ...status, balance: row.balance ?? status.balance, subscriptions: row.subscriptions ?? status.subscriptions,
-          authorizationSite: row.authorizationSite ?? status.authorizationSite, balanceSource: row.balanceSource ?? status.balanceSource });
-      } else {
-        next.set(key, { ...row, refreshFailed: true, displayAt: now });
-        this.rowFailures.delete(key);
-      }
+      next.set(key, { ...row, displayAt: now });
+      if (attempts > 3) this.rowFailures.delete(key);
     }
     for (const key of this.rowFailures.keys()) if (!next.has(key)) this.rowFailures.delete(key);
     this.rows = next;
@@ -216,10 +208,8 @@ class RelayAvailability {
     } catch (error) {
       if (this.request !== controller || controller.signal.aborted) return;
       this.refreshFailures = (this.refreshFailures || 0) + 1;
-      if ([401, 403].includes(error.status) || this.refreshFailures > 3) {
-        this.error = [401, 403].includes(error.status) ? '登录或授权已失效，请重新登录' : error.name === 'TimeoutError' ? '管理服务响应超时（12 秒）'
-          : error.status ? '管理服务返回 HTTP ' + error.status : '无法取得管理服务的刷新结果';
-      }
+      this.error = [401, 403].includes(error.status) ? '登录或授权已失效，请重新登录' : error.name === 'TimeoutError' ? '管理服务响应超时（12 秒）'
+        : error.status ? '管理服务返回 HTTP ' + error.status : '无法取得管理服务的刷新结果';
     } finally {
       if (this.request === controller) {
         this.request = null; this.paint();

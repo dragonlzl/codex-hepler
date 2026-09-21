@@ -107,11 +107,12 @@ class AutoSwitch {
       ? { ...active, eligible: true, healthRank: active.currentHealth === 'available' ? 0 : 1 } : null;
     const target = choose(candidates.map(item => item.name === incumbent?.name ? incumbent : item), status.activeName);
     this.state = { ...this.state, checkedAt: now, candidates, waitUntil: null };
-    if (active?.qualified && active.currentHealth === 'unavailable') {
+    if (active?.qualified && ['unavailable', 'unknown'].includes(active.currentHealth)) {
       if (this.waiting?.name !== active.name) this.waiting = { name: active.name, since: now };
       const waitUntil = this.waiting.since + GRACE_MS;
       if (now < waitUntil) {
-        this.state = { ...this.state, phase: 'waiting', waitUntil, message: '当前渠道不可用，持续检测满 3 分钟后再切换' };
+        this.state = { ...this.state, phase: 'waiting', waitUntil, message: active.currentHealth === 'unknown'
+          ? '当前渠道状态无法确认，连续异常满 3 分钟后再切换' : '当前渠道不可用，持续检测满 3 分钟后再切换' };
         return;
       }
     } else this.waiting = null;
@@ -125,6 +126,7 @@ class AutoSwitch {
     }
     const reason = !active ? '选择池中最优入口' : !active.qualified ? active.reason
       : active.currentHealth === 'unavailable' ? '当前渠道持续不可用已满 3 分钟'
+        : active.currentHealth === 'unknown' ? '当前渠道状态持续无法确认已满 3 分钟'
         : target.healthRank < (active.healthRank ?? 2) ? '绿色候选优先' : '优先级或订阅入口恢复';
     if (await this.store.selectAutomatic(target.name, status.autoSwitchGuard, valid)) {
       const lastSwitch = { at: now, from: status.activeName, to: target.name, reason, source: target.source };

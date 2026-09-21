@@ -10,6 +10,7 @@ const { start } = require('../../managed-relay-server');
 const { Availability, requestJson } = require('../availability');
 const { AixorLogin, mergeCookies } = require('../login-aixor');
 const { MonitorAuth } = require('../monitor-auth');
+const { defaults, evaluate } = require('../auto-switch-policy');
 const packy = require('../account-packycode');
 const fixture = require('./packy-account-fixture');
 const entries = [
@@ -77,6 +78,37 @@ test('each Packy configuration independently persists one source across restart,
   const auth = new MonitorAuth(c.home, 'packycode', (await c.status()).keys[0].accountId);
   assert.equal((await auth.read()).cookie, fixture.COOKIE);
   if (process.platform !== 'win32') assert.equal((await fs.stat(auth.file)).mode & 0o777, 0o600);
+});
+
+test('metered account failures and expiration never disqualify an independent key, public status failures do', async t => {
+  let now = Date.now(), failure = '';
+  const client = await setup(t, { clock: () => now, timeoutMs: 30, request: async (url, options) => {
+    if (failure === 'auth' && url === packy.BALANCE_ENDPOINT) throw Object.assign(new Error('private'), { status: 401 });
+    if (failure === 'settings' && url === packy.SETTINGS_ENDPOINT) throw Object.assign(new Error('private'), { code: 'PACKY_DNS_FAILED' });
+    if ((failure === 'balance' && url === packy.BALANCE_ENDPOINT) || (failure === 'status' && url.includes('/api/perf-metrics?'))) {
+      return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+    }
+    return fixture.request(url, options);
+  } });
+  await client.source('Packy B', 'account'); await client.login('Packy B');
+  await client.rows();
+  const state = await client.status();
+  const settings = { ...defaults(), enabled: true, pool: [{ name: 'Packy A', priority: 1, source: 'balance' }] };
+  for (failure of ['balance', 'auth', 'settings', 'status', '']) {
+    now += 15001;
+    const rows = await client.rows();
+    const project = rows.find(row => row.name === 'Packy A');
+    const metered = rows.find(row => row.name === 'Packy B');
+    const candidate = evaluate(settings, state.keys, rows, now)[0];
+    assert.equal(project.balance.state, 'available');
+    assert.equal(candidate.eligible, failure !== 'status');
+    assert.equal(project.state, failure === 'status' ? 'stale' : 'available');
+    assert.equal(metered.balance.state, failure === 'auth' ? 'auth-required' : ['balance', 'settings'].includes(failure) ? 'stale' : 'available');
+    if (failure === 'settings') {
+      assert.equal(metered.balance.failure.code, 'PACKY_DNS_FAILED');
+      assert.match(metered.balance.failure.message, /账户配置查询失败.*域名解析失败/);
+    }
+  }
 });
 
 test('all-account mode makes no key requests; distinct accounts require their own authorization', async t => {

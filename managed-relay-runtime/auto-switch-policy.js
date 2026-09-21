@@ -43,6 +43,7 @@ function color(sample) {
 
 function health(row, now) {
   const unknown = { current: 'unknown', rank: null, reason: '状态未知、过期或无法读取' };
+  if (row?.failure?.message) return { ...unknown, reason: '状态查询失败：' + row.failure.message };
   if (!row || row.referenceOnly || ['unsupported', 'auth-required', 'error', 'stale', 'no-data'].includes(row.state)) return unknown;
   if (Array.isArray(row.channels)) {
     // Automatic monitoring requests the exact API-key pool, independently of display settings.

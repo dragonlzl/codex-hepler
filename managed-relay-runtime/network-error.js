@@ -8,6 +8,7 @@ function networkAccessError(error, site = '该站点', signal) {
     ENOTFOUND: '域名解析失败，ENOTFOUND', EAI_AGAIN: '域名解析暂时失败，EAI_AGAIN',
     ENETUNREACH: '网络不可达，ENETUNREACH', EHOSTUNREACH: '站点不可达，EHOSTUNREACH',
     EPIPE: '连接已断开，EPIPE',
+    PACKY_DNS_FAILED: 'Packycode 安全域名解析失败', PACKY_DNS_TIMEOUT: 'Packycode 安全域名解析超时',
   };
   const code = error?.code || error?.cause?.code;
   const timeout = signal?.aborted || ['AbortError', 'TimeoutError'].includes(error?.name) ||

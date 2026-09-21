@@ -190,7 +190,7 @@ function requestContent(url, { outbound, signal, token, json, site = 'blackaicod
       const route = await outbound.resolve(url);
       if (settled) return;
       const options = {
-        agent: outbound.agent(route, signal), signal,
+        agent: outbound.agent(route, signal), signal, lookup: outbound.lookup?.(url, route),
         headers: { accept, 'cache-control': 'no-cache', ...(token ? { authorization: 'Bearer ' + token } : {}),
           ...(ACCOUNT_SITES[site]?.session ? { 'user-agent': 'Mozilla/5.0 CodexTool' } : {}),
           ...(session ? { cookie: session.cookie, ...(json === undefined ? { 'New-Api-User': String(session.userId) } : {}) } : {}),
@@ -233,7 +233,10 @@ function refreshFailure(error, timedOut, invalidResponse, timeoutMs) {
   }
   const reasons = { ECONNRESET: '连接被重置', ECONNREFUSED: '连接被拒绝', ENOTFOUND: '域名解析失败', EAI_AGAIN: '域名解析暂时失败',
     ENETUNREACH: '网络不可达', EHOSTUNREACH: '站点不可达', EPIPE: '连接已断开', ETIMEDOUT: '网络连接超时',
-    CERT_HAS_EXPIRED: 'TLS 证书已过期', UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS 证书无法验证' };
+    CERT_HAS_EXPIRED: 'TLS 证书已过期', UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS 证书无法验证',
+    ERR_TLS_CERT_ALTNAME_INVALID: 'TLS 证书与域名不匹配，请检查 DNS 或代理',
+    PACKY_DNS_FAILED: 'Packycode 安全域名解析失败，请检查网络或代理',
+    PACKY_DNS_TIMEOUT: 'Packycode 安全域名解析超时，请检查网络或代理' };
   const code = error.code || error.cause?.code;
   if (Object.hasOwn(reasons, code)) return { code, message: reasons[code] + '（' + code + '）' };
   if (invalidResponse || error.name === 'SyntaxError') return { code: 'INVALID_RESPONSE', message: '返回数据格式不符合预期' };
@@ -413,7 +416,10 @@ class Availability {
           Promise.all((source.dependencies || []).map(async resource => {
             const entry = await this.read(adapter, model, resource, scope, statusScope);
             // Plan names are optional; quota conversion must be current and valid.
-            if (entry.error && resource !== 'plans') throw Object.assign(new Error('Account metadata unavailable'), entry.authRequired ? { status: 401 } : {});
+            if (entry.error && resource !== 'plans') throw Object.assign(new Error('Account metadata unavailable'),
+              entry.authRequired ? { status: 401 } : { resourceFailure: entry.failure && {
+                ...entry.failure, message: '账户配置查询失败：' + entry.failure.message,
+              } });
             return [resource, entry.error ? null : entry.value];
           })),
         ]);
@@ -427,7 +433,7 @@ class Availability {
       } catch (error) {
         entry.error = true;
         entry.authRequired = requiresAuthorization && [401, 403].includes(error.status);
-        entry.failure = { ...refreshFailure(error, timedOut, invalidResponse, this.timeoutMs), at: this.clock() };
+        entry.failure = { ...(error.resourceFailure || refreshFailure(error, timedOut, invalidResponse, this.timeoutMs)), at: this.clock() };
         if (!this.controller.signal.aborted && !entry.authRequired) {
           // Fixed adapter/resource names and classified errors only: no credentials or raw responses.
           try { this.record({ event: 'availability_refresh_failed', provider: adapter.id, endpoint: resource,

@@ -160,6 +160,31 @@ test('persistent red waits exactly three minutes, all failed keeps last route an
   await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'A');
 });
 
+test('status refresh failure waits three minutes, recovery cancels it and later failures start fresh', async t => {
+  const fixtureState = await fixture(t);
+  const failedRows = now => {
+    const failed = row('A', now);
+    failed.state = 'stale';
+    failed.failure = { code: 'REFRESH_TIMEOUT', message: '查询超时（10 秒）' };
+    return [failed, row('B', now)];
+  };
+  fixtureState.setRows(failedRows(epoch)); await fixtureState.auto.tick();
+  assert.equal(fixtureState.auto.snapshot().phase, 'waiting');
+  assert.match(fixtureState.auto.snapshot().candidates[0].reason, /状态查询失败.*查询超时/);
+  assert.equal((await fixtureState.store.activeEntry()).name, 'A');
+  fixtureState.setNow(epoch + 60000); fixtureState.setRows([row('A', epoch + 60000), row('B', epoch + 60000)]);
+  await fixtureState.auto.tick(); assert.equal(fixtureState.auto.snapshot().waitUntil, null);
+  const restarted = epoch + 120000;
+  fixtureState.setNow(restarted); fixtureState.setRows(failedRows(restarted)); await fixtureState.auto.tick();
+  assert.equal(fixtureState.auto.snapshot().waitUntil, restarted + GRACE_MS);
+  fixtureState.setNow(restarted + GRACE_MS - 1); fixtureState.setRows(failedRows(restarted + GRACE_MS - 1));
+  await fixtureState.auto.tick(); assert.equal((await fixtureState.store.activeEntry()).name, 'A');
+  fixtureState.setNow(restarted + GRACE_MS); await fixtureState.auto.tick();
+  assert.equal((await fixtureState.store.activeEntry()).name, 'B');
+  assert.equal(fixtureState.events.length, 1);
+  assert.match(fixtureState.events[0].switchReason, /状态持续无法确认已满 3 分钟/);
+});
+
 test('recovery cancels grace, later outage starts a new three-minute wait', async t => {
   const f = await fixture(t);
   f.setRows([row('A', epoch, 'unavailable'), row('B')]); await f.auto.tick();

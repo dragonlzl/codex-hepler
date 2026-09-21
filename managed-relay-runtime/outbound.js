@@ -9,6 +9,7 @@ const { ProxyAgent } = require('proxy-agent');
 const { getProxyForUrl } = require('proxy-from-env');
 const { atomicWrite, problem } = require('./config-store');
 const { readWindowsProxies } = require('./windows-proxy');
+const { PackyDns, HOST: PACKY_HOST } = require('./packy-dns');
 
 const run = promisify(execFile);
 const SYSTEM_PROXY_SCRIPT = `ObjC.import('Foundation');
@@ -123,6 +124,7 @@ class Outbound {
     this.activeAgents = new Set();
     this.localPorts = new Set(options.localPorts || []);
     this.closed = false;
+    this.packyDns = new PackyDns(options.packyDnsOptions);
   }
 
   async settings() {
@@ -210,6 +212,11 @@ class Outbound {
     return { ...route, label: labelProxy(route.proxyUrl) };
   }
 
+  lookup(target, route) {
+    const url = new URL(target);
+    return !route.proxyUrl && url.protocol === 'https:' && url.hostname === PACKY_HOST ? this.packyDns.lookup : undefined;
+  }
+
   agent(route, signal) {
     if (this.closed) throw new Error('Outbound closed');
     if (!route.proxyUrl) return false;
@@ -265,7 +272,7 @@ class Outbound {
     finally { controller.abort(); }
   }
 
-  close() { this.closed = true; for (const agent of [...this.agents.values(), ...this.activeAgents]) { agent.destroy(); agent.httpAgent?.destroy(); agent.httpsAgent?.destroy(); } this.agents.clear(); this.activeAgents.clear(); }
+  close() { this.closed = true; this.packyDns.close(); for (const agent of [...this.agents.values(), ...this.activeAgents]) { agent.destroy(); agent.httpAgent?.destroy(); agent.httpsAgent?.destroy(); } this.agents.clear(); this.activeAgents.clear(); }
 }
 
 module.exports = { Outbound, readMacProxies, detectFlyingBirdProxy, systemProxyFor, bypasses, loopback, safeError, labelProxy };
