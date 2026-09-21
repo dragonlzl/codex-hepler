@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const https = require('node:https');
+const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { readBlackaicodingStatus, ENDPOINT, MONITOR_URL } = require('../availability-blackaicoding');
@@ -66,6 +67,46 @@ test('exact gpt6 beats other-model reference; sol never falls back; empty exact 
   assert.equal(parsed[MODELS[0]].last, null);
   assert.equal(parsed[MODELS[1]].last, null);
   assert.equal(parsed[MODELS[1]].sourceModelLabel, undefined);
+});
+
+test('compact view displays the same mixed-model reference and chart as full management', async () => {
+  const source = await fs.readFile(path.join(__dirname, '../../managed-relay-public/availability.js'), 'utf8');
+  const View = vm.runInNewContext(source + '\nRelayAvailability;', { Intl, Date,
+    escapeHtml: value => String(value).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';') });
+  const view = Object.assign(Object.create(View.prototype), { model: MODELS[0], error: '', simpleCharts: new Set(),
+    getState: () => ({ home: 'fixture', keys }), paint: () => {} });
+  const parsed = readBlackaicodingStatus(fixture(), MODELS)[MODELS[0]];
+  const row = { ...parsed, state: 'unavailable', displayAt: NOW };
+  assert.match(view.markup(row), /其他模型（参考）/);
+  const summary = view.simpleStatusMarkup(row, keys[0].name);
+  assert.match(summary, /其他模型参考：当前不可用/);
+  assert.match(summary, /simple-status unavailable/);
+  assert.match(summary, /点击查看检测图/);
+  assert.match(summary, /不能代表 gpt6 独立可用性/);
+  view.toggleSimpleChart(keys[0].name);
+  const chart = view.simpleStatusMarkup(row, keys[0].name);
+  assert.match(chart, /其他模型 · 参考/);
+  assert.match(chart, /availability-bars/);
+  assert.match(chart, /点击恢复文字展示/);
+  assert.equal((chart.match(/class="availability-sample /g) || []).length, 18);
+  assert.match(chart, /background:hsl\(24.0 72% 42%\)/);
+  view.toggleSimpleChart(keys[0].name);
+  assert.equal(view.simpleStatusMarkup(row, keys[0].name), summary);
+
+  for (const [state, color] of [['available', 'available'], ['degraded', 'degraded']]) {
+    const result = View.simpleStatus({ ...row, state, last: { at: NOW, state, ok: state === 'available' } }, NOW);
+    assert.equal(result.color, color);
+    assert.match(result.message, /^其他模型参考：当前可用/);
+  }
+  for (const state of ['auth-required', 'error', 'stale', 'no-data']) {
+    const unavailable = { ...row, state };
+    assert.equal(View.simpleStatus(unavailable, NOW).color, 'unknown');
+    assert.doesNotMatch(view.simpleStatusMarkup(unavailable, keys[0].name), /<button/);
+  }
+  const exact = readBlackaicodingStatus(fixture(), MODELS)[MODELS[1]];
+  assert.doesNotMatch(View.simpleStatus({ ...exact, state: 'unavailable' }, NOW).message, /参考/);
+  const { health } = require('../auto-switch-policy');
+  assert.equal(health(row, NOW).rank, null, 'reference data must still be excluded from automatic switching');
 });
 
 test('renamed groups, mismatched grouping and malformed coverage or data fail closed', () => {

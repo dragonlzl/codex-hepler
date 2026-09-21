@@ -166,6 +166,7 @@ footer{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
 .simple-availability-toggle.simple-status{border:0;text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;white-space:normal;overflow-wrap:anywhere}
 .simple-availability-toggle:hover{filter:brightness(.96)}
 .simple-history-frame{display:block;width:100%;padding:8px 6px;border:1px solid var(--line);border-radius:5px;background:#fafcfb}
+.simple-history-reference{display:block;margin-bottom:4px;color:#986818;font-size:9px;line-height:1.5}
 .simple-history-frame .availability-bars{width:100%;height:14px;margin:0;gap:.5px}
 .simple-history-frame .availability-sample{border-radius:1px}
 .simple-history-frame .availability-axis{width:100%;flex-wrap:nowrap;gap:4px;margin-top:4px;font-size:9px;line-height:1.5;font-variant-numeric:tabular-nums}

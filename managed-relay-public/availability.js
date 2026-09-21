@@ -296,9 +296,12 @@ class RelayAvailability {
   static simpleStatus(status, now = Date.now()) {
     const unknown = message => ({ color: 'unknown', message: message || '当前状态未知' });
     if (!status) return unknown('尚未检测');
-    if (status.referenceOnly) return unknown('暂无该模型检测');
     if (['stale', 'error', 'auth-required', 'unsupported', 'no-data'].includes(status.state)) {
       return unknown(({ stale: '状态已过期', error: '状态获取失败', 'auth-required': '需登录后检测', unsupported: '站点未适配' })[status.state] || status.message);
+    }
+    if (status.referenceOnly) {
+      const summary = RelayAvailability.simpleStatus({ ...status, referenceOnly: false }, now);
+      return summary.color === 'unknown' ? summary : { ...summary, message: '其他模型参考：' + summary.message };
     }
     // Never substitute an arbitrary channel when the API Key mapping is unavailable.
     if (Array.isArray(status.channels)) {
@@ -344,9 +347,10 @@ class RelayAvailability {
     if (!canToggle) return '<span class="simple-status ' + summary.color + '" title="' + escapeHtml(this.error || status?.failure?.message || status?.modelNote || status?.message || summary.message) + '">' + escapeHtml(summary.message) + '</span>';
     const chart = this.simpleCharts?.has(this.simpleChartKey(entryName));
     const action = chart ? '点击恢复文字展示' : '点击查看检测图';
+    const reference = status?.referenceOnly ? '<span class="simple-history-reference">其他模型 · 参考</span>' : '';
     return '<button type="button" class="simple-availability-toggle ' + (chart ? 'simple-history-frame' : 'simple-status ' + summary.color) + '" data-name="' + escapeHtml(entryName) +
-      '" aria-pressed="' + Boolean(chart) + '" aria-label="' + escapeHtml(entryName + ' · ' + summary.message + ' · ' + action) + '" title="' + escapeHtml(action) + '">' +
-      (chart ? this.markup(channel, entryName, true) : escapeHtml(summary.message)) + '</button>';
+      '" aria-pressed="' + Boolean(chart) + '" aria-label="' + escapeHtml(entryName + ' · ' + summary.message + ' · ' + action) + '" title="' + escapeHtml([status?.modelNote, action].filter(Boolean).join(' · ')) + '">' +
+      (chart ? reference + this.markup(channel, entryName, true) : escapeHtml(summary.message)) + '</button>';
   }
 
   simpleLoginMarkup(status, label) {
