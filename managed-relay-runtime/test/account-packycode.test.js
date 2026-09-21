@@ -43,7 +43,7 @@ async function setup(t, options = {}) {
     const entry = (await status()).keys.find(entry => entry.name === name);
     return post('/api/packycode/balance/source', { name, source, previousSource: entry.balanceSource, revision: entry.revision });
   };
-  const login = (name, username = 'normal') => post('/api/availability/login', { name, site: 'packycode', username, password: fixture.PASSWORD });
+  const login = (name, username = 'normal') => post('/api/availability/login', { name, site: 'packycode', username, password: fixture.PASSWORD, agreement: true });
   return { home, get, post, status, source, login, calls, keyCalls, rows: async () => (await get('/api/availability')).rows,
     restart: async () => { await app.close(); await launch(); } };
 }
@@ -112,18 +112,33 @@ test('a source switch during an account read cannot return the old source balanc
 test('Packy session login handles captcha and two-factor challenge without persisting secrets to responses', async t => {
   const client = new AixorLogin(fixture.request, Date.now, 'packycode'); t.after(() => client.clear());
   const signal = new AbortController().signal;
-  const result = await client.login({ username: 'normal', password: fixture.PASSWORD, captcha: { ticket: 'a+b/=', randstr: 'xyz' } }, signal);
+  const result = await client.login({ username: 'normal', password: fixture.PASSWORD, agreement: true, captcha: { ticket: 'a+b/=', randstr: 'xyz' } }, signal);
   assert.equal(result.credential.cookie, fixture.COOKIE);
-  const challenge = await client.login({ username: 'otp', password: fixture.PASSWORD }, signal);
+  const challenge = await client.login({ username: 'otp', password: fixture.PASSWORD, agreement: true }, signal);
   assert.ok(challenge.requires2fa); assert.ok(!JSON.stringify(challenge).includes('packy-pending'));
   await assert.rejects(client.login({ challengeId: challenge.challengeId, code: '000000' }, signal), /验证码/);
   assert.equal((await client.login({ challengeId: challenge.challengeId, code: '123456' }, signal)).credential.userId, 321);
-  const canceled = await client.login({ username: 'otp', password: fixture.PASSWORD }, signal);
+  const canceled = await client.login({ username: 'otp', password: fixture.PASSWORD, agreement: true }, signal);
   client.cancel(canceled.challengeId);
   await assert.rejects(client.login({ challengeId: canceled.challengeId, code: '123456' }, signal), error => error.status === 410);
   const rejecting = new AixorLogin(async () => ({ payload: { success: false, code: 'captcha_required', message: fixture.PASSWORD } }), Date.now, 'packycode');
-  await assert.rejects(rejecting.login({ username: 'normal', password: fixture.PASSWORD }, signal), /人机验证/);
+  await assert.rejects(rejecting.login({ username: 'normal', password: fixture.PASSWORD, agreement: true }, signal), /人机验证/);
   assert.equal(mergeCookies('', ['session=good; Domain=.packyapi.com', 'evil=x; Domain=aixor.cc'], 'packycode'), 'session=good');
+});
+
+test('Packy login requires explicit terms consent before contacting the upstream', async t => {
+  const client = await setup(t);
+  await client.source('Packy A', 'account');
+  const credentials = { name: 'Packy A', site: 'packycode', username: 'normal', password: fixture.PASSWORD };
+  for (const agreement of [undefined, false, 'true', 1]) {
+    const response = await client.post('/api/availability/login', { ...credentials, agreement });
+    assert.equal(response.code, 400);
+    assert.match(response.data.error, /请先阅读并同意 Packycode 的服务条款/);
+  }
+  assert.equal(client.calls.length, 0);
+  assert.equal((await client.post('/api/availability/login', { ...credentials, agreement: true })).code, 200);
+  const login = client.calls.find(call => new URL(call.url).pathname === '/api/user/login');
+  assert.deepEqual(login.settings.json, { username: 'normal', password: fixture.PASSWORD });
 });
 
 test('Packy captcha metadata is sanitized and account quota uses current site conversion', async () => {

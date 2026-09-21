@@ -40,6 +40,7 @@ class AixorLogin extends MonitorLogin {
       json = { code: payload.code.trim() };
     } else {
       if (this.site === 'aixor' && payload.agreement !== true) throw problem('请先阅读并同意 Aixor 用户协议。', 400);
+      if (this.site === 'packycode' && payload.agreement !== true) throw problem('请先阅读并同意 Packycode 的服务条款及相关政策。', 400);
       if (typeof payload.username !== 'string' || !payload.username.trim() || payload.username.length > 320 || typeof payload.password !== 'string' || !payload.password || payload.password.length > 4096) throw problem('请输入有效的账号和密码。', 400);
       json = { username: payload.username.trim(), password: payload.password };
     }

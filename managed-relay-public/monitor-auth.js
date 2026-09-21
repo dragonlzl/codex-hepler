@@ -41,7 +41,7 @@ class MonitorAuthorization {
       blackaicoding: { name: 'code for me', origin: 'https://blackaicoding.com', description: '自动读取监控和账号余额。' },
       input: { name: 'INPUT', origin: 'https://ai.input.im', description: '自动读取账号余额和订阅额度。公开可用性无需登录。' },
       aixor: { name: 'Aixor', origin: 'https://aixor.cc', description: '自动读取当前余额和未过期订阅。公开可用性无需登录。' },
-      packycode: { name: 'Packycode', origin: 'https://www.packyapi.com', description: '自动读取控制台当前余额，每 15 秒随检测刷新。需要时会在工具内弹出人机验证。' },
+      packycode: { name: 'Packycode', origin: 'https://www.packyapi.com', description: '请先阅读并勾选服务条款及相关政策，再完成人机验证。授权后自动读取控制台当前余额，每 15 秒随检测刷新。' },
       krill: { name: 'Krill', origin: 'https://www.krill-code.com', credentialName: 'krill_jwt', description: '自动读取个人账号余额、套餐状态和近 7 天用量。公开可用性无需登录。' },
       rightcode: { name: 'RC', origin: 'https://www.rightapi.ai', credentialName: 'userToken', description: '自动读取控制台当前余额，每 15 秒随检测刷新。Codex 模型可用性无需登录。' },
       timicc: { name: 'timiCC', origin: 'https://timicc.com', description: '自动读取当前余额，每 15 秒随检测刷新。两个 Codex 号池的公开状态无需登录。' },
@@ -75,13 +75,14 @@ class MonitorAuthorization {
     document.querySelector('#monitor-credential-label').textContent = session ? 'Cookie 请求头' : this.credentialName;
     this.form.elements.token.placeholder = session ? '粘贴 Cookie 的完整值' : '粘贴 ' + this.credentialName;
     this.tokenSubmit.textContent = session ? '验证并保存会话' : '验证并保存 ' + this.credentialName;
-    this.requiresAgreement = ['aixor', 'timicc'].includes(site);
+    this.requiresAgreement = ['aixor', 'timicc', 'packycode'].includes(site);
     document.querySelector('#monitor-auth-agreement').hidden = !this.requiresAgreement;
     document.querySelector('#monitor-agreement-links').innerHTML = ['timicc', 'aigo'].includes(site)
       ? [['terms', '服务条款'], ['usage-policy', '使用政策'], ['supported-regions', '支持的国家和地区'], ['service-specific-terms', '隐私政策']]
         .map(([path, label]) => '<a href="' + settings.origin + '/legal/' + path + '" target="_blank" rel="noreferrer">' + label + '</a>').join('、')
       : '<a href="' + settings.origin + '/user-agreement" target="_blank" rel="noreferrer">' + settings.name + ' 用户协议</a>';
     this.form.elements.agreement.required = this.requiresAgreement;
+    if (site === 'packycode') this.setPackyAgreements();
     const cookieLink = document.querySelector('#monitor-cookie-site');
     cookieLink.href = settings.origin + (site === 'packycode' ? '/console' : '/wallet');
     cookieLink.textContent = settings.name + (site === 'packycode' ? ' 控制台' : ' 钱包');
@@ -181,26 +182,54 @@ class MonitorAuthorization {
     }
   }
 
-  login() {
+  setPackyAgreements(options = {}) {
+    const documents = [['terms', '服务条款'], ['usage-policy', '使用政策'], ['supported-regions', '支持的国家和地区'], ['service-specific-terms', '服务特定条款']];
+    if (options.agreement) documents.push(['user-agreement', '用户协议']);
+    if (options.privacy) documents.push(['privacy-policy', '隐私政策']);
+    const links = document.querySelector('#monitor-agreement-links');
+    const markup = documents.map(([path, label]) => '<a href="https://www.packyapi.com/' + path + '" target="_blank" rel="noreferrer">' + label + '</a>').join('、');
+    if (links.innerHTML !== markup) {
+      links.innerHTML = markup;
+      this.form.elements.agreement.checked = false;
+    }
+  }
+
+  async login() {
     if (this.busy) return;
     if (this.browserOnly) { this.loginInBrowser(); return; }
     const fields = this.form.elements;
+    let packyOptions;
+    if (this.site === 'packycode' && !this.challengeId) {
+      if (!fields.agreement.checked) {
+        this.feedback.textContent = '请先阅读并同意 Packycode 的服务条款及相关政策，再登录。';
+        fields.agreement.focus();
+        return;
+      }
+      this.busy = true;
+      this.render();
+      this.feedback.textContent = '正在读取 Packycode 登录设置…';
+      try {
+        packyOptions = await this.packyChallenge.options();
+        this.setPackyAgreements(packyOptions);
+      } catch (error) {
+        this.feedback.textContent = error.name === 'TimeoutError' ? '读取登录设置超时，请稍后重试。' : error.message;
+        return;
+      } finally {
+        this.busy = false;
+        this.render();
+      }
+      if (!fields.agreement.checked) {
+        this.feedback.textContent = 'Packycode 的协议内容已更新，请阅读并重新勾选同意后登录。';
+        fields.agreement.focus();
+        return;
+      }
+    }
     const payload = this.challengeId ? { challengeId: this.challengeId, code: fields.code.value } : { username: fields.username.value, password: fields.password.value,
       ...(this.requiresAgreement ? { agreement: fields.agreement.checked } : {}) };
     fields.password.value = '';
     fields.code.value = '';
-    const agreed = fields.agreement.checked;
-    this.perform('正在登录并验证账号授权…', async () => {
-      if (this.site === 'packycode' && !payload.challengeId) {
-        const options = await this.packyChallenge.options();
-        if (options.agreement || options.privacy) {
-          document.querySelector('#monitor-auth-agreement').hidden = false;
-          document.querySelector('#monitor-agreement-links').innerHTML = [options.agreement ? '<a href="https://www.packyapi.com/user-agreement" target="_blank" rel="noreferrer">用户协议</a>' : '', options.privacy ? '<a href="https://www.packyapi.com/privacy-policy" target="_blank" rel="noreferrer">隐私政策</a>' : ''].filter(Boolean).join('及');
-          fields.agreement.required = true;
-          if (!agreed) throw new Error('请先阅读并同意 Packycode 的协议，再登录。');
-        }
-        payload.captcha = await this.packyChallenge.verify(options.captcha);
-      }
+    return this.perform('正在登录并验证账号授权…', async () => {
+      if (packyOptions) payload.captcha = await this.packyChallenge.verify(packyOptions.captcha);
       return this.send('/api/availability/login', payload);
     });
   }
