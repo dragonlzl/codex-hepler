@@ -12,6 +12,8 @@ const { networkAccessError } = require('./managed-relay-runtime/network-error');
 const { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
 const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
 const { createLauncher } = require('./managed-relay-runtime/codex-launcher');
+const { IntelligenceTests, routeId: intelligenceRouteId } = require('./managed-relay-runtime/intelligence-tests');
+const { loadBaseline } = require('./managed-relay-runtime/intelligence-review');
 
 const PUBLIC_DIR = path.join(__dirname, 'managed-relay-public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -71,14 +73,16 @@ async function start(options = {}) {
     const store = new ConfigStore(target, 'http://127.0.0.1:' + proxyPort + '/v1');
     const outbound = injected || new Outbound(target, { localPorts: [proxyPort, uiPort] });
     const diagnostics = new Diagnostics(target);
+    const intelligence = new IntelligenceTests(target, name => store.entry(name), outbound, options.intelligenceOptions);
     const availability = new Availability(outbound, {
       ...options.availabilityOptions, home: target, getEntry: name => store.entry(name), getEntries: async () => (await store.status()).keys,
+      record: entry => diagnostics.record(entry),
     });
     const autoSwitch = new AutoSwitch(store, availability, { ...options.autoSwitchOptions, record: event => {
       const safe = diagnostics.record(event);
       (options.log || console.log)(JSON.stringify(safe));
     } });
-    return { store, outbound, diagnostics, availability, autoSwitch };
+    return { store, outbound, diagnostics, availability, autoSwitch, intelligence };
   };
   // holder 的字段会被原地替换；下面的 facade 让代理与请求处理器始终读到当前目录的对象。
   const holder = { home: initialHome, ...build(initialHome, options.outbound) };
@@ -108,6 +112,7 @@ async function start(options = {}) {
   }, options.timeoutMs, outbound, options.connectTimeoutMs, entry => record({ event: 'relay_request_started', ...entry }));
   const lockReason = '当前目录由环境变量或启动参数指定，不能在页面修改。';
   const status = async () => {
+    const intelligence = holder.intelligence;
     const current = await store.status();
     const entry = current.keys.find(item => item.name === current.selectedProxyName);
     return { ...current, home: homeSource === 'default' ? displayPath(holder.home) : path.resolve(holder.home),
@@ -115,6 +120,7 @@ async function start(options = {}) {
       configPath: displayPath(paths.configFile), codexAppPath: appPath || null, appPathSource, appPathLocked,
       launch: await launcher.snapshot(),
       autoSwitch: autoSwitch.snapshot(),
+      intelligence: await intelligence.snapshot(current.keys),
       lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, accountGroupingAvailable: true, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
@@ -133,11 +139,12 @@ async function start(options = {}) {
       const fromConfig = homeSource === 'config';
       if (fromConfig) await writeConfigHome(paths.configFile, resolved);
       else await writeSettings({ home: resolved });
-      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics, availability: holder.availability, autoSwitch: holder.autoSwitch };
+      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics, availability: holder.availability, autoSwitch: holder.autoSwitch, intelligence: holder.intelligence };
       previous.autoSwitch.stop();
       Object.assign(holder, { home: resolved, ...next });
       next = null;
       homeSource = fromConfig ? 'config' : 'saved';
+      await previous.intelligence.close();
       await previous.availability.close();
       await previous.autoSwitch.close();
       holder.autoSwitch.start();
@@ -147,7 +154,7 @@ async function start(options = {}) {
       lastDiagnostic = null;
       return { message: `已切换到 ${resolved}，已保存到${fromConfig ? ' JSON 配置文件' : '目录设置'}${created ? '，并创建了空的 key_config.json' : ''}。` };
     } finally {
-      if (next) { next.autoSwitch.stop(); await next.availability.close(); await next.autoSwitch.close(); next.outbound.close(); await next.diagnostics.close(); }
+      if (next) { next.autoSwitch.stop(); await next.intelligence.close(); await next.availability.close(); await next.autoSwitch.close(); next.outbound.close(); await next.diagnostics.close(); }
       savingPaths = false;
     }
   };
@@ -172,6 +179,14 @@ async function start(options = {}) {
         if (req.headers.origin && req.headers.origin !== uiUrl) throw problem('跨站请求不允许。', 403);
         if (!String(req.headers['content-type']).startsWith('application/json')) throw problem('需要 JSON 请求。', 415);
         const payload = await body(req);
+        if (['/api/intelligence/start', '/api/intelligence/review'].includes(url.pathname)) {
+          if (req.headers.origin !== uiUrl) throw problem('智力测试必须由本地管理页面发起。', 403);
+          if (savingPaths) throw problem('正在切换配置目录，请稍后重试。', 409);
+          const intelligence = holder.intelligence;
+          const result = await (url.pathname.endsWith('/review') ? intelligence.startReview(payload) : intelligence.start(payload));
+          json(res, 202, { scope: intelligence.scope, result });
+          return;
+        }
         if (url.pathname === '/api/launch') {
           // Process launch is restricted to this UI origin and a fixed action.
           if (req.headers.origin !== uiUrl) throw problem('启动请求必须来自本地管理页面。', 403);
@@ -216,7 +231,16 @@ async function start(options = {}) {
         else if (url.pathname === '/api/proxy/install') result = await store.install(payload.name);
         else if (url.pathname === '/api/proxy/restore') result = await store.restore();
         else if (url.pathname === '/api/keys') result = await store.add(payload);
-        else if (url.pathname === '/api/keys/edit') result = await store.edit(payload.originalName, payload);
+        else if (url.pathname === '/api/keys/edit') {
+          const currentStore = holder.store, intelligence = holder.intelligence;
+          const previous = (await currentStore.keys()).config.keys.find(entry => entry.name === payload.originalName);
+          result = await currentStore.edit(payload.originalName, payload);
+          const updated = (await currentStore.keys()).config.keys.find(entry => entry.name === payload.name.trim());
+          if (previous && updated && intelligenceRouteId(previous) !== intelligenceRouteId(updated)) {
+            try { await intelligence.forget(previous); }
+            catch { result.message += ' 旧测试文件清理失败，请检查目录权限；旧结果已不可用。'; }
+          }
+        }
         else if (url.pathname === '/api/reorder') result = await store.reorder(payload.names);
         else if (url.pathname === '/api/pin') result = await store.pin(payload.name, payload.pinned);
         else if (url.pathname === '/api/accounts/bind') result = await availability.changeBindings(prepare => store.bindAccounts(payload, prepare));
@@ -245,6 +269,25 @@ async function start(options = {}) {
       }
       if (req.method !== 'GET') throw problem('方法不允许。', 405);
       if (url.pathname === '/api/status') { json(res, 200, await status()); return; }
+      if (url.pathname === '/api/intelligence') {
+        const intelligence = holder.intelligence, currentStore = holder.store;
+        json(res, 200, await intelligence.snapshot((await currentStore.status()).keys)); return;
+      }
+      if (url.pathname === '/api/intelligence/baseline.png') {
+        const image = await loadBaseline();
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin' });
+        res.end(image); return;
+      }
+      if (url.pathname.startsWith('/intelligence-results/')) {
+        const match = url.pathname.match(/^\/intelligence-results\/([a-f0-9]{64})\/([a-f0-9-]{36})\/(index\.html|screenshot\.png)$/);
+        if (!match) throw problem('结果链接无效。', 404);
+        const intelligence = holder.intelligence, currentStore = holder.store;
+        const result = await intelligence.artifact(match[1], match[2], match[3], (await currentStore.status()).keys);
+        res.writeHead(200, { 'Content-Type': result.type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+          'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'same-origin',
+          ...(result.csp ? { 'Content-Security-Policy': result.csp, 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()' } : {}) });
+        res.end(result.body); return;
+      }
       if (url.pathname === '/api/auto-switch/options') {
         const current = holder, state = await current.store.status();
         const snapshot = await current.availability.snapshot(state.keys, state.autoSwitchSettings.model);
@@ -259,7 +302,7 @@ async function start(options = {}) {
         const current = holder;
         const monitor = current.availability;
         const { keys } = await current.store.status();
-        json(res, 200, await monitor.snapshot(keys, url.searchParams.get('model') ?? undefined));
+        json(res, 200, await monitor.snapshot(keys, url.searchParams.get('model') ?? undefined, { followApiKey: url.searchParams.get('view') === 'simple' }));
         return;
       }
       if (url.pathname === '/api/diagnostics') { json(res, 200, diagnostics.snapshot()); return; }
@@ -284,9 +327,9 @@ async function start(options = {}) {
     outbound.localPorts.add(proxy.address().port);
     outbound.localPorts.add(ui.address().port);
     autoSwitch.start();
-  } catch (error) { autoSwitch.stop(); await availability.close(); await autoSwitch.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
+  } catch (error) { autoSwitch.stop(); await holder.intelligence.close(); await availability.close(); await autoSwitch.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
   return { uiUrl, proxyUrl: store.proxyUrl, store, outbound, status, autoSwitch, close: async () => {
-    autoSwitch.stop(); await availability.close(); await autoSwitch.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close();
+    autoSwitch.stop(); await holder.intelligence.close(); await availability.close(); await autoSwitch.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close();
   } };
 }
 

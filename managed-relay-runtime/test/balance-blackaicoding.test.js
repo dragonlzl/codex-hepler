@@ -66,7 +66,8 @@ test('balance and availability fail independently; stale balance keeps its fetch
   balanceFailure = 503;
   let row = (await monitor.snapshot(keys)).rows[0];
   assert.equal(row.state, 'available');
-  assert.deepEqual(row.balance, { state: 'error', fetchedAt: null });
+  assert.deepEqual(row.balance, { state: 'error', fetchedAt: null,
+    failure: { code: 'HTTP_503', message: '上游 HTTP 503', at: now } });
   balanceFailure = 0; monitorFailure = true; now += REFRESH_MS;
   row = (await monitor.snapshot(keys)).rows[0];
   assert.equal(row.state, 'stale');
@@ -75,7 +76,8 @@ test('balance and availability fail independently; stale balance keeps its fetch
   balanceFailure = 503; monitorFailure = false; now += REFRESH_MS;
   row = (await monitor.snapshot(keys)).rows[0];
   assert.equal(row.state, 'available');
-  assert.deepEqual(row.balance, { amount: 42.12, currency: 'USD', state: 'stale', fetchedAt });
+  assert.deepEqual(row.balance, { amount: 42.12, currency: 'USD', state: 'stale', fetchedAt,
+    failure: { code: 'HTTP_503', message: '上游 HTTP 503', at: now } });
   balanceFailure = 401; now += REFRESH_MS;
   row = (await monitor.snapshot(keys)).rows[0];
   assert.equal(row.balance.state, 'auth-required');

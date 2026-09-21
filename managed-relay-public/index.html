@@ -44,8 +44,39 @@
               <p id="launch-feedback" role="status" aria-live="polite"></p>
             </section>
             </div>
-            <section id="routes-panel" aria-labelledby="list-title">
+            <section id="routes-panel" aria-label="中转列表">
+              <div class="route-view-toolbar">
+                <div class="route-view-tabs" role="tablist" aria-label="中转列表视图">
+                  <button type="button" class="route-view-tab" id="simple-route-tab" data-route-view="simple" role="tab" aria-controls="simple-route-view" aria-selected="true">简洁列表</button>
+                  <button type="button" class="route-view-tab" id="advanced-route-tab" data-route-view="advanced" role="tab" aria-controls="advanced-route-view" aria-selected="false" tabindex="-1">完整管理</button>
+                </div>
+                <button type="button" id="global-intelligence-test" class="global-intelligence-button">全部智力测试</button>
+              </div>
+
+
+              <section id="simple-route-view" class="simple-route-view" role="tabpanel" aria-labelledby="simple-route-tab">
+                <p class="simple-list-help">每个账号 / API Key 独立一行 · 检测跟随 API Key · 状态每 15 秒更新</p>
+                <div class="simple-list-scroll" role="table" aria-label="简洁中转列表" tabindex="0">
+                  <div class="simple-list-head" role="row"><span role="columnheader">中转别名</span><span role="columnheader">可用状态监测</span><span role="columnheader">余额</span><span role="columnheader">订阅</span><span role="columnheader">智力状态</span><span role="columnheader">智力测试</span><span role="columnheader">切换</span></div>
+                  <div id="simple-route-list" class="simple-route-list" role="rowgroup"></div>
+                </div>
+                <div id="simple-route-empty" class="empty-state" role="status" aria-live="polite" hidden><strong>还没有中转配置</strong><p>点击右上角「新增中转」，添加第一个请求入口。</p></div>
+              </section>
+              <section id="advanced-route-view" class="advanced-route-view" role="tabpanel" aria-labelledby="advanced-route-tab" hidden>
               <div class="list-toolbar"><div class="list-heading"><h2 id="list-title">中转列表</h2><span id="count" class="count">—</span></div><div class="list-filters"><label class="search-box"><span aria-hidden="true">⌕</span><input id="route-search" type="search" aria-label="搜索名称或地址" placeholder="搜索名称或地址" autocomplete="off" /></label><label class="model-filter">模型<select id="availability-model" disabled><option value="gpt-6-astra">gpt-6-astra</option><option value="gpt-5.6-sol">gpt-5.6-sol</option></select></label></div></div>
+              <details class="intelligence-settings">
+                <summary>智力测试设置 <span>固定题目 · 保留最近成功结论</span></summary>
+                <div class="intelligence-fields">
+                  <label>测试模型<input id="intelligence-model" list="intelligence-models" value="gpt-6-astra" maxlength="128" pattern="[a-zA-Z0-9][a-zA-Z0-9._:\/\-]{0,127}" required autocomplete="off" spellcheck="false" /></label>
+                  <datalist id="intelligence-models"><option value="gpt-6-astra"></option><option value="gpt-5.6-sol"></option></datalist>
+                  <label>推理强度<select id="intelligence-effort"><option value="low">low</option><option value="medium">medium</option><option value="high" selected>high</option><option value="xhigh">xhigh</option></select></label>
+                </div>
+                <label class="intelligence-review-toggle"><input id="intelligence-review-enabled" type="checkbox" checked />生成后进行智力判断（模型自评）</label>
+                <p class="intelligence-help">勾选后，由被测中转和模型在全新对话中评审本次截图与完整 HTML，额外消耗一次模型请求。开关影响之后启动的测试，选择会自动保存。<a href="/api/intelligence/baseline.png" target="_blank" rel="noopener noreferrer">查看固定 INPUT 正常基准 ↗</a></p>
+                <p>创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画，你不需要任何测试</p>
+                <p class="intelligence-help">点击中转旁的「智力测试」开始。每次均为全新对话，会消耗该中转的模型额度；相同参数便于比较。截图为 1280 × 800，打开结果可查看动画。需要本机安装 Chrome。</p>
+              </details>
+
               <div class="list-help"><span>按中转商归组 · 拖动手柄排序</span><span>状态每 15 秒更新</span></div>
               <div class="availability-filters" role="group" aria-label="按当前可用性筛选" aria-describedby="availability-filter-help">
                 <button type="button" data-status-filter="all" aria-pressed="true">全部 <span data-filter-count="all">0</span></button>
@@ -54,8 +85,10 @@
               </div>
               <p id="availability-filter-help" class="filter-help">按检测条最后一格筛选：红色为不可用，非红色为可用；无检测记录仅在全部显示。</p>
               <p id="list-feedback" class="panel-hint" role="status" aria-live="polite"></p>
+
               <div id="route-list" class="route-list"></div>
               <div id="route-empty" class="empty-state" role="status" aria-live="polite" hidden><strong></strong><p></p></div>
+              </section>
             </section>
           </section>
           <section id="page-connection" class="page" aria-labelledby="connection-title" hidden>
@@ -221,6 +254,7 @@
     <script src="/availability.js" defer></script>
     <script src="/account-bindings.js" defer></script>
     <script src="/auto-switch.js" defer></script>
+    <script src="/intelligence.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

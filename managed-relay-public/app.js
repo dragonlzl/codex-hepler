@@ -4,7 +4,10 @@ let busy = false;
 let loaded = false;
 let feedback = { phase: 'idle', message: '' };
 const list = document.querySelector('#route-list');
+const simpleList = document.querySelector('#simple-route-list');
 const routesPanel = document.querySelector('#routes-panel');
+const simpleRouteView = document.querySelector('#simple-route-view');
+const advancedRouteView = document.querySelector('#advanced-route-view');
 const listFeedback = document.querySelector('#list-feedback');
 const currentRoute = document.querySelector('#current-route');
 const currentRouteName = document.querySelector('#current-route-name');
@@ -12,6 +15,11 @@ const addDialog = document.querySelector('#add-dialog');
 const addForm = document.querySelector('#add-form');
 let search = '';
 let statusFilter = 'all';
+let routeView = 'simple';
+try {
+  const savedRouteView = localStorage.getItem('relay-route-view');
+  if (savedRouteView === 'advanced' || savedRouteView === 'simple') routeView = savedRouteView;
+} catch {}
 let draggedProvider = false;
 let expanded = {};
 try { expanded = JSON.parse(localStorage.getItem('relay-expanded-providers') || '{}') || {}; } catch {}
@@ -68,7 +76,10 @@ cliCwd.addEventListener('input', () => {
   }
 });
 const launchFeedback = document.querySelector('#launch-feedback');
+const intelligence = new RelayIntelligence({ list: routesPanel, getState: () => state, request: api,
+  blocked: () => !loaded || busy || networkBusy || Boolean(draggedName) });
 const availability = new RelayAvailability({
+  getView: () => routeView,
   list: routesPanel, select: document.querySelector('#availability-model'), getState: () => state, isDragging: () => Boolean(draggedName), onChange: applyAvailabilityFilter,
   mutateBalanceSource: async payload => {
     if (busy || networkBusy || draggedName) throw new Error('请等待当前操作完成。');
@@ -189,9 +200,51 @@ function routeMarkup(entry, accountLabel = '', address = '', keyHint = '') {
     (address ? '<code class="route-endpoint">' + escapeHtml(address) + '</code>' : '') +
     (keyHint ? '<code class="route-key">API Key · ' + escapeHtml(keyHint) + '</code>' : '') + '</div>' +
     (tag ? '<span class="active-tag">' + tag + '</span>' : '<span></span>') + '<div class="route-actions">' +
+    '<button type="button" class="intelligence-button" data-name="' + escapeHtml(entry.name) + '">智力测试</button>' +
     '<button type="button" class="pin-button' + (entry.pinned ? ' pinned' : '') + '" data-name="' + escapeHtml(entry.name) + '" data-pinned="' + Boolean(entry.pinned) + '" aria-pressed="' + Boolean(entry.pinned) + '" title="' + (entry.pinned ? '取消置顶' : '置顶') + '" aria-label="' + (entry.pinned ? '取消置顶' : '置顶') + '"><span class="pin-icon" aria-hidden="true"></span></button>' +
     '<button type="button" class="edit-button" data-name="' + escapeHtml(entry.name) + '" title="编辑" aria-label="编辑"><span class="edit-icon" aria-hidden="true"></span></button>' +
-    '<button class="select-button" data-name="' + escapeHtml(entry.name) + '">' + (tag === '当前使用' ? '已选中' : tag === '待接入' ? '已选择' : '切换') + '</button></div></article>';
+    '<button class="select-button" data-name="' + escapeHtml(entry.name) + '">' + (tag === '当前使用' ? '已选中' : tag === '待接入' ? '已选择' : '切换') + '</button></div><div class="intelligence-result" hidden></div></article>';
+}
+
+function simpleRouteMarkup(entry) {
+  const chosen = viewMode === 'proxy' && entry.name === state.selectedProxyName;
+  const active = entry.name === state.activeName;
+  const tag = active ? '当前使用' : chosen ? '待接入' : '';
+  const name = escapeHtml(entry.name);
+  const provider = escapeHtml(RelayGroups.provider(entry));
+  return '<div class="simple-route' + (active ? ' is-active' : '') + '" data-name="' + name + '" data-provider="' + provider + '" role="row">' +
+    '<div class="simple-route-alias" role="cell"><strong title="' + name + '">' + name + '</strong><small>' + escapeHtml(RelayGroups.providerLabel(RelayGroups.provider(entry))) + (tag ? ' · ' + tag : '') + '</small></div>' +
+    '<div class="simple-availability" role="cell" data-name="' + name + '"><span class="simple-status unknown">读取中…</span></div>' +
+    '<div class="simple-balance" role="cell"><span class="simple-muted">—</span></div>' +
+    '<div class="simple-subscription" role="cell"><span class="simple-muted">—</span></div>' +
+    '<div class="simple-intelligence" role="cell"></div>' +
+    '<div class="simple-test-action" role="cell"><button type="button" class="intelligence-button" data-name="' + name + '" aria-label="智力测试：' + name + '">智力测试</button></div>' +
+    '<div class="simple-switch-action" role="cell"><button type="button" class="select-button" data-name="' + name + '" aria-label="切换：' + name + '">' + (active ? '已选中' : chosen ? '已选择' : '切换') + '</button></div></div>';
+}
+
+function renderSimpleList() {
+  const entries = state.keys.filter(entry => (entry.name + ' ' + entry.baseurl).toLowerCase().includes(search));
+  const selectedName = viewMode === 'proxy' ? state.selectedProxyName : state.activeName;
+  const selected = entries.find(entry => entry.name === selectedName);
+  const ordered = selected ? [selected, ...entries.filter(entry => entry !== selected)] : entries;
+  const simpleMarkup = ordered.map(simpleRouteMarkup).join('');
+  if (simpleMarkup !== simpleList._markup && !draggedName) { simpleList.innerHTML = simpleMarkup; simpleList._markup = simpleMarkup; }
+  const empty = document.querySelector('#simple-route-empty');
+  empty.hidden = entries.length > 0;
+  simpleList.parentElement.hidden = !entries.length;
+  empty.querySelector('strong').textContent = !loaded ? '正在读取中转配置…' : state.keys.length ? '没有匹配的中转' : '还没有中转配置';
+  empty.querySelector('p').textContent = !loaded ? '请稍候。' : state.keys.length ? '试试其他名称或地址。' : '点击右上角「新增中转」，添加第一个请求入口。';
+}
+
+function renderRouteViews() {
+  const simple = routeView === 'simple';
+  simpleRouteView.hidden = !simple;
+  advancedRouteView.hidden = simple;
+  document.querySelectorAll('.route-view-tab').forEach(button => {
+    const selected = button.dataset.routeView === routeView;
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
 }
 
 function groupMarkup(group, index) {
@@ -240,6 +293,7 @@ function renderCurrentRoute() {
 }
 
 function renderControls() {
+  intelligence.sync();
   renderCurrentRoute();
   installButton.disabled = busy || !loaded || state.writeBlocked || !state.selectedProxyName;
   restoreButton.disabled = busy || !loaded || state.writeBlocked || !state.proxyInstalled;
@@ -349,7 +403,7 @@ function applyAvailabilityFilter() {
     button.setAttribute('aria-pressed', String(button.dataset.statusFilter === statusFilter));
   });
   document.querySelectorAll('[data-filter-count]').forEach(badge => { badge.textContent = counts[badge.dataset.filterCount]; });
-  document.querySelector('#count').textContent = visible + ' 个中转商 / ' + configurations + ' 个配置';
+  document.querySelector('#count').textContent = routeView === 'simple' ? simpleList.children.length + ' 个配置' : visible + ' 个中转商 / ' + configurations + ' 个配置';
   const empty = document.querySelector('#route-empty');
   empty.hidden = visible > 0;
   let title, detail;
@@ -379,6 +433,8 @@ const automatic = new AutoSwitchControls({ getState: () => state, request: api, 
 
 function render() {
   const groups = RelayGroups.group(state.keys);
+  renderSimpleList();
+  renderRouteViews();
   document.querySelector('#nav-count').textContent = groups.length;
   document.querySelector('#proxy-url').textContent = state.proxyUrl || '—';
   document.querySelector('#mode-description').textContent = state.proxyInstalled
@@ -480,6 +536,21 @@ document.querySelectorAll('.mode-button').forEach(button => button.addEventListe
     render();
   }
 }));
+document.querySelectorAll('.route-view-tab').forEach(button => button.addEventListener('click', () => {
+  routeView = button.dataset.routeView === 'advanced' ? 'advanced' : 'simple';
+  try { localStorage.setItem('relay-route-view', routeView); } catch {}
+  renderRouteViews();
+  applyAvailabilityFilter();
+  availability.sync();
+  if (location.hash !== '#routes/' + routeView) location.hash = 'routes/' + routeView;
+}));
+document.querySelector('.route-view-tabs').addEventListener('keydown', event => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const tabs = [...document.querySelectorAll('.route-view-tab')];
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? 1 : routeView === 'simple' ? 1 : 0;
+  tabs[index].click(); tabs[index].focus();
+});
 routesPanel.addEventListener('click', async event => {
   const focusRoot = list;
   const toggle = event.target.closest('.group-toggle');
@@ -622,14 +693,21 @@ currentRouteName.addEventListener('click', () => {
   if (!entry) return;
   search = ''; statusFilter = 'all'; document.querySelector('#route-search').value = '';
   saveExpansion(RelayGroups.provider(entry), true); render();
-  const row = [...list.querySelectorAll('.route')].find(row => row.dataset.name === entry.name);
-  row?.scrollIntoView({ block: 'center', behavior: 'smooth' }); row?.querySelector('.edit-button').focus({ preventScroll: true });
+  const root = routeView === 'simple' ? simpleList : list;
+  const row = [...root.querySelectorAll('.route, .simple-route')].find(row => row.dataset.name === entry.name);
+  row?.scrollIntoView({ block: 'center', behavior: 'smooth' }); row?.querySelector('.edit-button, .intelligence-button')?.focus({ preventScroll: true });
 });
 let currentPage = null;
 const pageScroll = new Map();
 function navigate() {
   const names = { routes: '中转站', connection: '运行与连接', settings: '必要设置' };
-  const page = Object.hasOwn(names, location.hash.slice(1)) ? location.hash.slice(1) : 'routes';
+  const [requestedPage, requestedView] = location.hash.slice(1).split('/');
+  const page = Object.hasOwn(names, requestedPage) ? requestedPage : 'routes';
+  if (page === 'routes' && ['simple', 'advanced'].includes(requestedView)) {
+    routeView = requestedView;
+    try { localStorage.setItem('relay-route-view', routeView); } catch {}
+    renderRouteViews(); applyAvailabilityFilter(); availability.sync();
+  }
   const content = document.querySelector('main');
   if (currentPage && currentPage !== page) pageScroll.set(currentPage, content.scrollTop);
   document.querySelectorAll('.page').forEach(panel => { panel.hidden = panel.id !== 'page-' + page; });

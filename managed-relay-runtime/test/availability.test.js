@@ -119,7 +119,29 @@ test('cold failures and malformed responses do not become red model samples', as
   assert.equal(row.state, 'error');
   assert.deepEqual(row.history, []);
   assert.equal(row.uptimePct, null);
+  assert.equal(row.failure.code, 'INVALID_RESPONSE');
   monitor.close();
+});
+
+test('refresh failures expose classified causes, record safe diagnostics and clear them on recovery', async () => {
+  let now = NOW, failure = Object.assign(new Error('private-key'), { code: 'ECONNRESET' });
+  const events = [];
+  const monitor = new Availability({}, { clock: () => now, record: event => events.push(event), request: async () => {
+    if (failure) throw failure;
+    return payload(now);
+  } });
+  try {
+    let row = (await monitor.snapshot(keys)).rows[0];
+    assert.equal(row.failure.code, 'ECONNRESET'); assert.match(row.failure.message, /连接被重置/);
+    assert.equal(events[0].event, 'availability_refresh_failed'); assert.equal(events[0].endpoint, 'status');
+    assert.equal(JSON.stringify([row, events]).includes('private-key'), false);
+    failure = Object.assign(new Error('private-token'), { status: 429 }); now += REFRESH_MS;
+    row = (await monitor.snapshot(keys)).rows[0];
+    assert.equal(row.failure.code, 'HTTP_429'); assert.match(row.failure.message, /频率受限/);
+    failure = null; now += REFRESH_MS;
+    row = (await monitor.snapshot(keys)).rows[0];
+    assert.equal(row.state, 'available'); assert.equal(row.failure, undefined);
+  } finally { await monitor.close(); }
 });
 
 test('synchronous transport errors can be retried after the cache expires', async () => {

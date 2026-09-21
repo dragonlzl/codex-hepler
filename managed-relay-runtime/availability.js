@@ -226,6 +226,20 @@ async function requestJson(url, options) {
 }
 function requestText(url, options) { return requestContent(url, options, 'text/html'); }
 
+function refreshFailure(error, timedOut, invalidResponse, timeoutMs) {
+  if (timedOut) return { code: 'REFRESH_TIMEOUT', message: '查询超时（' + timeoutMs / 1000 + ' 秒）' };
+  if (Number.isInteger(error.status) && error.status >= 400 && error.status <= 599) {
+    return { code: 'HTTP_' + error.status, message: '上游 HTTP ' + error.status + (error.status === 429 ? '，请求频率受限' : '') };
+  }
+  const reasons = { ECONNRESET: '连接被重置', ECONNREFUSED: '连接被拒绝', ENOTFOUND: '域名解析失败', EAI_AGAIN: '域名解析暂时失败',
+    ENETUNREACH: '网络不可达', EHOSTUNREACH: '站点不可达', EPIPE: '连接已断开', ETIMEDOUT: '网络连接超时',
+    CERT_HAS_EXPIRED: 'TLS 证书已过期', UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS 证书无法验证' };
+  const code = error.code || error.cause?.code;
+  if (Object.hasOwn(reasons, code)) return { code, message: reasons[code] + '（' + code + '）' };
+  if (invalidResponse || error.name === 'SyntaxError') return { code: 'INVALID_RESPONSE', message: '返回数据格式不符合预期' };
+  return { code: 'REFRESH_FAILED', message: '查询失败，原因未识别' };
+}
+
 class Availability {
   constructor(outbound, options = {}) {
     this.outbound = outbound;
@@ -235,6 +249,7 @@ class Availability {
     this.request = options.request;
     this.clock = options.clock || Date.now;
     this.timeoutMs = options.timeoutMs ?? 10000;
+    this.record = options.record || (() => {});
     this.auths = new Map(Object.keys(ACCOUNT_SITES).map(site => [site,
       options.auths?.[site] || (site === 'blackaicoding' && options.auth) || new MonitorAuth(options.home, site)]));
     this.cache = new Map();
@@ -317,10 +332,10 @@ class Availability {
 
   async selectTimiccPool(status, entry, groups) {
     if (entry.statusMode !== 'api-key') return { ...status, statusMode: 'all' };
-    const unknown = message => ({ ...status, statusMode: 'api-key', channels: [], state: 'no-data', message, modelNote: message });
-    if (groups.authRequired) return unknown('请登录 timiCC 账号，以识别该 API Key 的分组。');
+    const unknown = (message, extra = {}) => ({ ...status, statusMode: 'api-key', channels: [], state: 'no-data', message, modelNote: message, ...extra });
+    if (groups.authRequired) return unknown('请登录 timiCC 账号，以识别该 API Key 的分组。', { requiresLogin: true });
     // A stale group mapping must not silently display the old pool after a group change.
-    if (groups.error) return unknown('API Key 分组查询失败，请检查网络或授权后重试；可切换为全部号池。');
+    if (groups.error) return unknown('API Key 分组查询失败，请检查网络或授权后重试；可切换为全部号池。', { failure: groups.failure || { message: 'API Key 分组查询失败' } });
     let key;
     try { key = await this.getEntry(entry.name); } catch { return unknown('无法读取该子项的 API Key，请刷新列表。'); }
     if (typeof key?.value !== 'string' || !key.value) return unknown('无法读取该子项的 API Key，请刷新列表。');
@@ -334,7 +349,7 @@ class Availability {
   }
 
   async selectAigoPools(status, entry, groups) {
-    const unknown = message => ({ ...status, statusMode: 'api-key', channels: [], state: 'no-data', message, modelNote: message });
+    const unknown = (message, extra = {}) => ({ ...status, statusMode: 'api-key', channels: [], state: 'no-data', message, modelNote: message, ...extra });
     const all = (extra = {}) => ({ ...status, statusMode: 'all', collapsibleChannels: true, ...extra });
     let key;
     try { key = await this.getEntry(entry.name); } catch { key = null; }
@@ -344,8 +359,8 @@ class Availability {
     if (entry.naturalAccountId && naturalAccountId(key) !== entry.naturalAccountId) {
       return entry.statusMode === 'api-key' ? unknown('API Key 已变更，请刷新列表。') : all({ modelNote: '无法确认当前 API Key 分组，全部号池按指定顺序展示。' });
     }
-    if (groups?.authRequired) return entry.statusMode === 'api-key' ? unknown('请登录派大星账号，以识别该 API Key 的号池。') : all({ modelNote: '请登录派大星账号，以将当前 API Key 对应号池置顶。' });
-    if (groups?.error) return entry.statusMode === 'api-key' ? unknown('API Key 号池查询失败，请检查网络或授权后重试；可切换为全部号池。') : all({ modelNote: 'API Key 号池暂时无法确认，全部号池按指定顺序展示。' });
+    if (groups?.authRequired) return entry.statusMode === 'api-key' ? unknown('请登录派大星账号，以识别该 API Key 的号池。', { requiresLogin: true }) : all({ modelNote: '请登录派大星账号，以将当前 API Key 对应号池置顶。' });
+    if (groups?.error) return entry.statusMode === 'api-key' ? unknown('API Key 号池查询失败，请检查网络或授权后重试；可切换为全部号池。', { failure: groups.failure || { message: 'API Key 号池查询失败' } }) : all({ modelNote: 'API Key 号池暂时无法确认，全部号池按指定顺序展示。' });
     const group = groups?.value?.[aigoKeys.keyHash(key.value)];
     if (!group) return entry.statusMode === 'api-key' ? unknown('未在授权账号中找到该 API Key，请登录对应账号；可切换为全部号池。') : all({ modelNote: '未找到当前 API Key 的号池，全部号池按指定顺序展示。' });
     const groupName = String(group.groupName || '').replaceAll(key.value, '[已隐藏]');
@@ -383,7 +398,8 @@ class Availability {
     entry.pending = (async () => {
       const controller = new AbortController();
       const signal = AbortSignal.any([controller.signal, this.controller.signal]);
-      const timer = setTimeout(() => controller.abort(new Error('Status timeout')), this.timeoutMs);
+      let timedOut = false, invalidResponse = false;
+      const timer = setTimeout(() => { timedOut = true; controller.abort(new Error('Status timeout')); }, this.timeoutMs);
       try {
         const credential = requiresAuthorization ? await this.auths.get(scope).read() : null;
         if (requiresAuthorization && !credential) throw Object.assign(new Error('Account authorization required'), { status: 401 });
@@ -402,13 +418,22 @@ class Availability {
           })),
         ]);
         signal.throwIfAborted();
+        invalidResponse = true;
         entry.value = source.parse(data, source.body ? requestedAt : this.clock(), model, Object.fromEntries(dependencies));
         entry.fetchedAt = this.clock();
         entry.error = false;
+        entry.failure = null;
         entry.authRequired = false;
       } catch (error) {
         entry.error = true;
         entry.authRequired = requiresAuthorization && [401, 403].includes(error.status);
+        entry.failure = { ...refreshFailure(error, timedOut, invalidResponse, this.timeoutMs), at: this.clock() };
+        if (!this.controller.signal.aborted && !entry.authRequired) {
+          // Fixed adapter/resource names and classified errors only: no credentials or raw responses.
+          try { this.record({ event: 'availability_refresh_failed', provider: adapter.id, endpoint: resource,
+            at: new Date(entry.failure.at).toISOString(), phase: 'refresh', outcome: 'failed',
+            errorCode: entry.failure.code, durationMs: this.clock() - entry.at }); } catch { /* Logging cannot fail a refresh. */ }
+        }
       } finally {
         clearTimeout(timer);
         controller.abort();
@@ -422,7 +447,7 @@ class Availability {
     if (!MODELS.includes(model)) throw problem('不支持的可用性模型。', 400);
     const authorizationVersion = this.authorizationVersion;
     this.retainPackySources(options.allKeys || keys);
-    if (options.automatic) keys = keys.map(entry => ['timicc', 'aigo'].includes(adapterFor(entry.baseurl)?.id) ? { ...entry, statusMode: 'api-key' } : entry);
+    if (options.automatic || options.followApiKey) keys = keys.map(entry => ['timicc', 'aigo'].includes(adapterFor(entry.baseurl)?.id) ? { ...entry, statusMode: 'api-key' } : entry);
     // Status belongs to a provider; balances and subscriptions belong to a key account.
     const monitors = new Map();
     const statusGroup = entry => entry.displayProviderId || providerId(entry.baseurl);
@@ -462,11 +487,14 @@ class Availability {
       accounts.forEach((account, index) => {
         if (account) row[['balance', 'subscriptions'][index]] = {
           ...account.value, fetchedAt: account.fetchedAt,
+          ...(account.error && !account.authRequired && account.failure ? { failure: account.failure } : {}),
           state: account.authRequired ? 'auth-required' : account.error ? (account.value ? 'stale' : 'error') : 'available',
         };
       });
       if (row.subscriptions?.hideExpired) row.subscriptions.items = row.subscriptions.items.filter(item => item.expiresAt > this.clock());
-      Object.assign(row, { source: adapter.source, fetchedAt: entry.fetchedAt, ...(adapter.verifyAuthorization && !keyBalance ? { authorizationSite: adapter.id } : {}) }, status);
+      Object.assign(row, { source: adapter.source, fetchedAt: entry.fetchedAt,
+        ...(entry.error && !entry.authRequired && entry.failure ? { failure: entry.failure } : {}),
+        ...(adapter.verifyAuthorization && !keyBalance ? { authorizationSite: adapter.id } : {}) }, status);
       if (adapter.snapshot && status) return { ...row, ...adapter.snapshot(status, entry, this.clock()) };
       if (entry.authRequired) return { ...row, state: 'auth-required', message: '监控需要授权或授权已过期' };
       if (entry.error) return { ...row, state: status ? 'stale' : 'error', message: status ? '刷新失败，保留上次样本' : '状态源暂时无法连接' };

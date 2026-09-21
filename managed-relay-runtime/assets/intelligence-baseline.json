@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "label": "INPUT · 正常基准",
+  "imageSha256": "72cdc9654f725e1abdf737555422317c15ed397345d65ae0e9ce2a479bf650a7",
+  "sourceRunId": "e2f55e2b-b85e-4791-be23-6bbb6e669eed",
+  "sourceCompletedAt": "2026-09-20T05:16:35.755Z",
+  "confirmedBy": "user",
+  "width": 1280,
+  "height": 800
+}
