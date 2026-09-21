@@ -434,7 +434,7 @@ class RelayAvailability {
     // Both views use the same samples, colours, tooltips and time labels. Spans let
     // the compact chart live inside a native button for mouse/keyboard toggling.
     const tag = historyOnly ? 'span' : 'div';
-    const timeline = samples.length ? '<' + tag + ' class="availability-bars' + (stale ? ' stale' : '') + '" data-columns="' + capacity + '" style="grid-template-columns:repeat(' + capacity + ',minmax(0,1fr))" role="img" aria-label="' + escapeHtml(this.model + ' · ' + (status?.sourceModelLabel || '') + ' · ' + (status?.groupLabel || '') + ' · ' + message + ' · ' + summary) + '">' + parts.join('') + '</' + tag + '>' +
+    const timeline = samples.length ? '<' + tag + ' class="availability-bars' + (stale ? ' stale' : '') + '" data-columns="' + capacity + '" style="--availability-columns:' + capacity + ';grid-template-columns:repeat(' + capacity + ',minmax(0,1fr))" role="img" aria-label="' + escapeHtml(this.model + ' · ' + (status?.sourceModelLabel || '') + ' · ' + (status?.groupLabel || '') + ' · ' + message + ' · ' + summary) + '">' + parts.join('') + '</' + tag + '>' +
       '<' + tag + ' class="availability-axis"><span>' + escapeHtml(samples[0].timeLabel || time(samples[0].at)) + '</span><span>' + escapeHtml(samples.at(-1).endTimeLabel || time(samples.at(-1).at)) + '</span></' + tag + '>' : '';
     if (historyOnly) return timeline;
     return '<div class="availability-meta"><code>' + escapeHtml(status?.modelLabel || this.model) + '</code>' +

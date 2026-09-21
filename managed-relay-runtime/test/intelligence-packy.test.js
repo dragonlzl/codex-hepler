@@ -7,7 +7,8 @@ const { review, REVIEW_PROMPT, loadBaseline } = require('../intelligence-review'
 
 const settings = { model: 'test-model', effort: 'high' };
 const HTML = '<!doctype html><html><body><svg><text>鹈鹕</text></svg></body></html>';
-const NORMAL = { status: 'completed', verdict: '正常', summary: '达到基准。', findings: [], limitations: [] };
+const NORMAL = { status: 'completed', verdict: '正常', summary: '达到基准。',
+  findings: [{ dimension: '主体表现', source: '截图', observation: '本地模拟评审依据，用于验证传输，不是真实模型结论。' }], limitations: [] };
 const INPUT = [{ role: 'user', content: [{ type: 'input_text', text: '只回复 OK' }] }];
 function emit(res, text) {
   res.writeHead(200, { 'content-type': 'text/event-stream' });

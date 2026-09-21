@@ -77,6 +77,15 @@ test('review parsing never fabricates verdicts for malformed, incomplete, or fai
   assert.throws(() => parseReview(JSON.stringify({ ...NORMAL, findings: [{ ...NORMAL.findings[0], source: '图片' }] })), /findings.source/);
 });
 
+test('neither completed verdict is accepted without evidence, while a failed review may have no findings', () => {
+  for (const verdict of ['正常', '降智']) {
+    assert.throws(() => parseReview(JSON.stringify({ ...NORMAL, verdict, findings: [] })), /正常或降智均必须提供具体依据/);
+    assert.equal(parseReview(JSON.stringify({ ...NORMAL, verdict })).verdict, verdict);
+  }
+  const failed = { status: 'failed', verdict: null, summary: '关键关系无法确认。', findings: [], limitations: ['图片无法读取。'] };
+  assert.deepEqual(parseReview(JSON.stringify(failed)), failed);
+});
+
 test('automatic review follows the captured model; disabling it sends no review and existing artifacts can be reviewed manually', async t => {
   const calls = [];
   const f = await fixture(t, { review: async (entry, record) => { calls.push({ entry, record }); return NORMAL; } });

@@ -31,7 +31,7 @@ function parseReview(text) {
   if (data.status === 'completed' ? !['正常', '降智'].includes(data.verdict) : data.verdict !== null) throw invalid('verdict 与 status 不符合约定');
   if (!textField(data.summary, 1200)) throw invalid('summary 缺失、为空或过长');
   if (!Array.isArray(data.findings) || data.findings.length > 4) throw invalid('findings 必须是最多 4 条的数组');
-  if (data.verdict === '降智' && !data.findings.length) throw invalid('判定降智必须提供具体依据');
+  if (data.status === 'completed' && !data.findings.length) throw invalid('判定正常或降智均必须提供具体依据');
   for (const item of data.findings) {
     if (!object(item) || !textField(item.dimension, 80) || !textField(item.observation, 2400)) throw invalid('findings 的维度或观察内容缺失、为空或过长');
     if (!['截图', '代码', '截图与代码'].includes(item.source)) throw invalid('findings.source 必须为截图、代码或截图与代码');
