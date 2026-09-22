@@ -316,15 +316,19 @@ class RelayAvailability {
     let message = '当前可用';
     if (recent3) message += '，3分钟内存在不可用';
     else if (recent10) message += '，10分钟内存在不可用';
-    // Require coverage across the whole window. Empty buckets, long gaps and coarse
-    // hourly aggregates cannot establish ten minutes of continuous availability.
-    const anchor = history.findLastIndex(sample => sample.at < now - 10 * 60000);
-    const covered = anchor >= 0 ? history.slice(anchor) : [];
+    // Pick the longest fully covered window. Empty buckets, long gaps and samples
+    // coarser than the window cannot establish continuous availability.
     const tolerance = interval + 15000;
-    const continuous = interval <= 10 * 60000 && covered.length > 1 && now - last.at <= tolerance &&
-      covered.every((sample, index) => ['ok', 'warn'].includes(RelayAvailability.sampleColor(sample)) &&
-        (!index || sample.at - covered[index - 1].at <= tolerance));
-    if (!recent10 && continuous) message = '持续可用超过10分钟';
+    if (!recent10 && now - last.at <= tolerance) {
+      for (const [minutes, label] of [[1440, '24小时'], [480, '8小时'], [60, '1小时'], [10, '10分钟']]) {
+        if (interval > minutes * 60000) continue;
+        const anchor = history.findLastIndex(sample => sample.at < now - minutes * 60000);
+        const covered = anchor >= 0 ? history.slice(anchor) : [];
+        const continuous = covered.length > 1 && covered.every((sample, index) =>
+          ['ok', 'warn'].includes(RelayAvailability.sampleColor(sample)) && (!index || sample.at - covered[index - 1].at <= tolerance));
+        if (continuous) { message = '持续可用超过' + label; break; }
+      }
+    }
     return { color: color === 'warn' ? 'degraded' : 'available', message };
   }
 
