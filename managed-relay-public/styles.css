@@ -190,6 +190,7 @@ footer{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
 .simple-intelligence-link{color:#377658;font-size:11px;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}.simple-intelligence-link:hover{color:#1c624a}
 .simple-intelligence time{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}.simple-intelligence-note{color:#986818;font-size:10px}
 .simple-login-button{display:flex;width:64px;min-height:24px;margin-inline:auto;padding:0;border:0;background:transparent;color:#377658;font-size:11px;text-align:center;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;align-items:center;justify-content:center;white-space:nowrap}.simple-login-button:hover{color:#1c624a;background:transparent}
+.simple-balance-login{display:grid;justify-items:start;gap:2px}.simple-balance-login .simple-login-button{width:auto;margin-inline:0}
 .simple-route-view .empty-state{margin-top:14px}
 @media(max-width:760px){.route-view-toolbar{align-items:stretch;flex-direction:column;gap:8px}.route-view-tabs{width:100%}.route-view-tab{flex:1}.global-intelligence-button{width:100%}.simple-list-head,.simple-route{gap:8px;padding-inline:10px;min-width:820px}.simple-route-actions button{font-size:10px;padding-inline:6px}.simple-route-alias strong{font-size:12px}}
 

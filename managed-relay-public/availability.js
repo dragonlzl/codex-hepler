@@ -350,7 +350,12 @@ class RelayAvailability {
 
   simpleBalanceMarkup(balance, status) {
     const loginRequired = status?.balance?.state === 'auth-required' || status?.subscriptions?.state === 'auth-required';
-    if (loginRequired) return this.simpleLoginMarkup(status, '登录查看');
+    if (loginRequired) {
+      if (!Number.isFinite(balance?.amount) || balance.currency !== 'USD') return this.simpleLoginMarkup(status, '登录查看');
+      const stale = Boolean(this.error) || balance.state !== 'available';
+      return '<div class="simple-balance-login"><strong class="simple-value' + (stale ? ' stale' : '') + '">' + escapeHtml(this.money(balance.amount)) + '</strong>' +
+        (stale ? '<span class="simple-data-note">上次余额</span>' : '') + this.simpleLoginMarkup(status, '重新登录') + '</div>';
+    }
     if (!balance) return '<span class="simple-muted">—</span>';
     if (balance.kind === 'packy-key') {
       if (balance.unlimited) return '<strong class="simple-value">无限额度</strong>';
