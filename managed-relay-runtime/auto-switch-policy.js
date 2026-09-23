@@ -91,9 +91,11 @@ function evaluate(settings, keys, rows, now) {
     const state = health(row, now);
     let reason = null;
     let fundingState = 'available';
-    const exclude = (message, confirmed = false) => {
+    let fundingIssue = null;
+    const exclude = (message, confirmed = false, issue = null) => {
       reason = message;
       fundingState = confirmed ? 'unavailable' : 'unknown';
+      fundingIssue = issue;
     };
     if (!key) exclude('配置已删除', true);
     let remaining = null;
@@ -108,9 +110,9 @@ function evaluate(settings, keys, rows, now) {
         const unusable = (!plan && Array.isArray(row.subscriptions.items)) || (plan &&
           (['expired', 'pending', 'revoked', 'cancelled', 'suspended', 'frozen'].includes(plan.state) ||
             (Number.isFinite(plan.startsAt) && plan.startsAt > now) || (Number.isFinite(plan.expiresAt) && plan.expiresAt <= now)));
-        if (unusable) exclude('关联套餐不存在、未生效或已失效', true);
+        if (unusable) exclude('关联套餐不存在、未生效或已失效', true, 'inactive');
         else if (remaining === null) exclude('套餐额度未知或不是美元额度');
-        else if (remaining <= 0 || remaining < settings.subscriptionMinimum) exclude(`订阅剩余低于 ${currencyFormat.format(settings.subscriptionMinimum)} 或已耗尽`, true);
+        else if (remaining <= 0 || remaining < settings.subscriptionMinimum) exclude(`订阅剩余低于 ${currencyFormat.format(settings.subscriptionMinimum)} 或已耗尽`, true, 'insufficient');
       }
     } else if (!reason) {
       if (!fresh(row?.balance, now)) exclude(row?.balance?.state === 'auth-required'
@@ -120,10 +122,12 @@ function evaluate(settings, keys, rows, now) {
     }
     if (!reason && item.source !== 'subscription') {
       remaining = row.balance.unlimited ? Infinity : row.balance.amount;
-      if (remaining <= 0 || remaining < settings.balanceMinimum) exclude(`余额低于 ${currencyFormat.format(settings.balanceMinimum)} 或已耗尽`, true);
+      if (remaining <= 0 || remaining < settings.balanceMinimum) exclude(`余额低于 ${currencyFormat.format(settings.balanceMinimum)} 或已耗尽`, true, 'insufficient');
     }
     return { ...item, merchantId: key?.merchantId, currentHealth: state.current, healthRank: state.rank,
-      fundingState, fundingReason: reason, healthReason: state.reason,
+      fundingState, fundingReason: reason, fundingIssue,
+      fundingFetchedAt: row?.[item.source === 'subscription' ? 'subscriptions' : 'balance']?.fetchedAt ?? null,
+      healthReason: state.reason,
       qualified: !reason, eligible: !reason && state.rank !== null, reason: reason || state.reason,
       remaining: Number.isFinite(remaining) ? remaining : null, unlimited: remaining === Infinity,
       sampleAt: row?.channels?.[0]?.last?.at ?? row?.last?.at ?? null };

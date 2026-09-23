@@ -12,7 +12,12 @@ const { start } = require('../../managed-relay-server');
 
 async function fixture(t, baseA = 'https://a.example/v1', baseB = 'https://b.example/codex/v1') {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-regression-'));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const cleanups = [];
+  t.after(async () => {
+    // Stop background writers before deleting their configuration directory.
+    for (const close of cleanups) await close();
+    await fs.rm(home, { recursive: true, force: true });
+  });
   const original = `# Original provider must survive\nmodel_provider = 'original.provider'\nmodel = "test-model"\n[model_providers.'original.provider']\nname = "Original identity"\nbase_url = '${baseA}' # preserve this comment\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_websockets = true\n[projects."/tmp/project"]\ntrust_level = "trusted"\n`;
   const auth = '{\n  "OPENAI_API_KEY": "sk-test-a", "extra": "keep"\n}\n';
   const keys = [{ name: '中转站甲', value: 'sk-test-a', baseurl: baseA }, { name: '备用线路✨', value: 'sk-test-b', baseurl: baseB }];
@@ -20,7 +25,7 @@ async function fixture(t, baseA = 'https://a.example/v1', baseB = 'https://b.exa
   await fs.writeFile(path.join(home, 'auth.json'), auth);
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys, target_file: 'auth.json' }));
   const store = new ConfigStore(home, 'http://127.0.0.1:3211/v1');
-  return { home, store, original, auth, keys, config: () => fs.readFile(store.configPath, 'utf8') };
+  return { home, store, original, auth, keys, onCleanup: close => cleanups.push(close), config: () => fs.readFile(store.configPath, 'utf8') };
 }
 
 test('TOML edits only the active value, preserving quoted/dotted keys, inline tables and comments', () => {
@@ -52,7 +57,7 @@ test('route order persists in relay state without rewriting key configuration', 
   const f = await fixture(t);
   const before = await fs.readFile(f.store.keysPath, 'utf8');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   await post(app, '/api/reorder', { names: ['备用线路✨', '中转站甲'] });
   assert.deepEqual((await f.store.status()).keys.map(entry => entry.name), ['备用线路✨', '中转站甲']);
   assert.equal(await fs.readFile(f.store.keysPath, 'utf8'), before);
@@ -64,7 +69,7 @@ test('pin API preserves credentials, base order and routing across refresh and m
   const f = await fixture(t);
   const keysBefore = await fs.readFile(f.store.keysPath, 'utf8');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   await post(app, '/api/reorder', { names: ['备用线路✨', '中转站甲'] });
   await post(app, '/api/pin', { name: '中转站甲', pinned: true });
   const state = await (await fetch(app.uiUrl + '/api/status')).json();
@@ -113,7 +118,7 @@ test('invalid pins and failed writes leave existing order and active selection i
   await f.store.reorder(['备用线路✨', '中转站甲']);
   const before = await fs.readFile(f.store.statePath, 'utf8');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   for (const payload of [{ name: 'missing', pinned: true }, { name: '中转站甲', pinned: 'false' }]) {
     const res = await fetch(app.uiUrl + '/api/pin', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
     assert.equal(res.status, 400);
@@ -248,7 +253,7 @@ test('editing renames a pinned route without losing metadata, base order, select
   raw.keys[0].note = 'keep entry metadata';
   await fs.writeFile(f.store.keysPath, JSON.stringify(raw));
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   await app.store.install('中转站甲');
   await app.store.reorder(['备用线路✨', '中转站甲']);
   await app.store.pin('中转站甲', true);
@@ -293,7 +298,7 @@ test('editing direct route credentials updates the catalog until explicitly appl
 test('edit rejects duplicate, invalid and stale changes without overwriting saved data', async t => {
   const f = await fixture(t);
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   const before = await fs.readFile(f.store.keysPath, 'utf8');
   const original = await editPayload(app.store, '中转站甲');
   const requestEdit = payload => fetch(app.uiUrl + '/api/keys/edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
@@ -343,7 +348,7 @@ test('editing an active proxy route changes new requests while an existing SSE k
   });
   const f = await fixture(t, a.url + '/v1');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   await app.store.install('中转站甲');
   const configBefore = await f.config();
   const response = await fetch(app.proxyUrl + '/responses');
@@ -367,7 +372,7 @@ test('connection diagnostics survive page refresh and remain separate from model
   });
   const f = await fixture(t, target.url + '/v1');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   const result = await post(app, '/api/network/test', { name: '中转站甲' });
   assert.equal(result.diagnostic.status, 200);
   const status = await app.status();
@@ -396,7 +401,7 @@ test('Chinese/emoji routes survive real HTTP responses; switch auth/path and kee
   const b = await upstream(t, (req, res) => res.end(JSON.stringify({ url: req.url, auth: req.headers.authorization })));
   const f = await fixture(t, a.url + '/v1', b.url + '/codex/v1');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   await post(app, '/api/proxy/install', { name: '中转站甲' });
   const response = await fetch(app.proxyUrl + '/responses?test=1', { method: 'POST', headers: { authorization: 'Bearer old-client-key' }, body: 'request-body' });
   assert.equal(response.status, 200);
@@ -426,7 +431,7 @@ test('bad/disconnected upstream and request timeout cannot take down either loca
   });
   const f = await fixture(t, target.url + '/v1');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, timeoutMs: 100, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   await post(app, '/api/proxy/install', { name: '中转站甲' });
   for (const suffix of ['/reset', '/wait']) assert.equal((await fetch(app.proxyUrl + suffix)).status, 502);
   await fetch(app.proxyUrl + '/truncated').then(r => r.text()).catch(() => {});
@@ -448,7 +453,7 @@ test('gzip bytes and content length pass through unchanged', async t => {
   });
   const f = await fixture(t, target.url + '/v1');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   await post(app, '/api/proxy/install', { name: '中转站甲' });
   await new Promise((resolve, reject) => {
     const req = http.request(app.proxyUrl + '/responses', { method: 'POST', headers: { 'content-encoding': 'gzip', 'content-length': bytes.length } }, res => {
@@ -481,7 +486,7 @@ test('WebSocket upgrade retains provider auth and forwards both directions', asy
   });
   const f = await fixture(t, target.url + '/v1');
   const app = await start({ home: f.home, proxyPort: 0, uiPort: 0, log: () => {} });
-  t.after(() => app.close());
+  f.onCleanup(() => app.close());
   await post(app, '/api/proxy/install', { name: '中转站甲' });
   const client = net.connect(Number(new URL(app.proxyUrl).port), '127.0.0.1');
   await once(client, 'connect');

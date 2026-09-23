@@ -1,4 +1,5 @@
 const { defaults, validateSettings, evaluate, choose, WINDOW_MS, REFRESH_MS } = require('./auto-switch-policy');
+const { AutoSwitchFunding } = require('./auto-switch-funding');
 
 class AutoSwitch {
   constructor(store, availability, { clock = Date.now, intervalMs = REFRESH_MS, record = () => {} } = {}) {
@@ -7,12 +8,17 @@ class AutoSwitch {
     this.closed = false;
     this.pending = null;
     this.failures = new Map();
+    this.funding = new AutoSwitchFunding(store.home);
     this.observationVersion = 0;
     this.signature = null;
     this.state = { phase: 'disabled', message: '自动切换已关闭', candidates: [], checkedAt: null, lastSwitch: null };
   }
 
-  snapshot() { return structuredClone(this.state); }
+  snapshot() {
+    const state = structuredClone(this.state);
+    if (this.funding.warning) state.message += ' · ' + this.funding.warning;
+    return state;
+  }
 
   start() {
     if (this.closed || this.timer) return;
@@ -62,6 +68,9 @@ class AutoSwitch {
     const status = await this.store.status();
     if (generation !== this.generation || this.closed) return;
     const settings = validateSettings(status.autoSwitchSettings || defaults(), status.keys);
+    await this.funding.load();
+    if (generation !== this.generation || this.closed) return;
+    this.funding.reconcile(settings, status.keys);
     this.settings = settings;
     const signature = JSON.stringify([settings, this.availability.authorizationVersion,
       status.keys.map(key => [key.name, key.revision, key.accountId, key.balanceSource])]);
@@ -72,6 +81,8 @@ class AutoSwitch {
     }
     this.keys = status.keys;
     if (!settings.enabled || !status.proxyInstalled || status.writeBlocked) {
+      await this.funding.save();
+      if (generation !== this.generation || this.closed) return;
       this.state = { ...this.state, candidates: [], waitUntil: null, phase: !settings.enabled ? 'disabled' : 'paused',
         message: !settings.enabled ? '自动切换已关闭' : status.writeBlocked ? '配置写入被阻止，自动切换已暂停' : '尚未接入本地代理，自动切换已暂停' };
       return;
@@ -84,6 +95,9 @@ class AutoSwitch {
     if (!valid()) return;
     const now = this.clock();
     const candidates = evaluate(settings, status.keys, result.rows, now);
+    this.funding.apply(settings, status.keys, candidates, now);
+    await this.funding.save();
+    if (!valid()) return;
     for (const candidate of candidates) {
       const failure = this.failures.get(candidate.name);
       if (!failure) continue;

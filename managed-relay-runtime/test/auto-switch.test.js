@@ -283,6 +283,7 @@ test('subscription reset restores merchant subscription ahead of its balance ent
   config.pool.push({ name: 'A 订阅', priority: 1, source: 'subscription', subscriptionId: 42 }); await f.save(config);
   const sub = row('A 订阅'); sub.subscriptions = { state: 'available', fetchedAt: epoch, items: [plan(0.5)] };
   f.setRows([row('A'), row('B'), sub]); await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'A');
+  f.setNow(epoch + 1); sub.subscriptions.fetchedAt = epoch + 1;
   sub.subscriptions.items = [plan(10)]; await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'A 订阅');
 });
 
