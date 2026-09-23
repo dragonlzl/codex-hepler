@@ -1,6 +1,6 @@
 // Policy consumes normalized monitor data; it never reads credentials or writes routes.
+// Recovery evidence for entering a candidate, never a delay before leaving a failed route.
 const WINDOW_MS = 3 * 60000;
-const GRACE_MS = 3 * 60000;
 const REFRESH_MS = 15000;
 const MODELS = ['gpt-6-astra', 'gpt-5.6-sol'];
 const currencyFormat = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 20 });
@@ -43,8 +43,9 @@ function color(sample) {
 
 function health(row, now) {
   const unknown = { current: 'unknown', rank: null, reason: '状态未知、过期或无法读取' };
-  if (row?.failure?.message) return { ...unknown, reason: '状态查询失败：' + row.failure.message };
-  if (!row || row.referenceOnly || ['unsupported', 'auth-required', 'error', 'stale', 'no-data'].includes(row.state)) return unknown;
+  if (row?.state === 'auth-required' || row?.requiresLogin) return { ...unknown, reason: '监控未登录或登录已过期，不代表 API Key 失效' };
+  if (row?.failure) return { ...unknown, reason: '状态查询失败：' + (row.failure.message || '原因未知') };
+  if (!row || row.referenceOnly || ['unsupported', 'error', 'stale', 'no-data'].includes(row.state)) return unknown;
   if (Array.isArray(row.channels)) {
     // Automatic monitoring requests the exact API-key pool, independently of display settings.
     if (row.channels.length !== 1) return { ...unknown, reason: '无法确认 API Key 对应号池' };
@@ -53,9 +54,10 @@ function health(row, now) {
   const last = row.last;
   if (!Number.isFinite(last?.at) || last.at > now + 5000 || now - last.at > (row.staleAfterMs || 180000)) return unknown;
   const current = color(last);
-  if (!['available', 'degraded'].includes(current) || row.state === 'unavailable') {
+  if (['unavailable', 'maintenance'].includes(current) || row.state === 'unavailable') {
     return { current: 'unavailable', rank: null, reason: '当前检测不可用' };
   }
+  if (!['available', 'degraded'].includes(current)) return unknown;
   const history = (row.history || []).filter(sample => Number.isFinite(sample.at) && sample.at <= now);
   const interval = row.sampleIntervalMs || 0;
   const samples = interval > WINDOW_MS ? [history.at(-1) || last] : history.filter(sample => sample.at >= now - WINDOW_MS);
@@ -88,25 +90,40 @@ function evaluate(settings, keys, rows, now) {
     const row = rows.find(row => row.name === item.name);
     const state = health(row, now);
     let reason = null;
-    if (!key) reason = '配置已删除';
-    else if (row?.balance?.state === 'auth-required' || row?.state === 'auth-required') reason = '未登录或登录已过期';
-    else if (!fresh(row?.balance, now)) reason = '余额无法确认或数据已过期';
-    else if (row.balance.currency !== 'USD' && !row.balance.unlimited) reason = '余额单位无法换算为美元';
-    else if (!row.balance.unlimited && !Number.isFinite(row.balance.amount)) reason = '余额未知';
+    let fundingState = 'available';
+    const exclude = (message, confirmed = false) => {
+      reason = message;
+      fundingState = confirmed ? 'unavailable' : 'unknown';
+    };
+    if (!key) exclude('配置已删除', true);
     let remaining = null;
     if (!reason && item.source === 'subscription') {
-      if (!fresh(row.subscriptions, now)) reason = '订阅未授权、无法读取或数据已过期';
+      // Only the selected funding source decides eligibility. Website login
+      // failure is missing telemetry, not evidence that the API key cannot work.
+      if (!fresh(row?.subscriptions, now)) exclude(row?.subscriptions?.state === 'auth-required'
+        ? '订阅查询需重新登录' : '订阅无法读取或数据已过期');
       else {
         const plan = row.subscriptions.items?.find(plan => plan.id === item.subscriptionId);
         remaining = subscriptionRemaining(plan, key.merchantId, now);
-        if (remaining === null) reason = '套餐失效、额度未知或不是美元额度';
-        else if (remaining <= 0 || remaining < settings.subscriptionMinimum) reason = `订阅剩余低于 ${currencyFormat.format(settings.subscriptionMinimum)} 或已耗尽`;
+        const unusable = (!plan && Array.isArray(row.subscriptions.items)) || (plan &&
+          (['expired', 'pending', 'revoked', 'cancelled', 'suspended', 'frozen'].includes(plan.state) ||
+            (Number.isFinite(plan.startsAt) && plan.startsAt > now) || (Number.isFinite(plan.expiresAt) && plan.expiresAt <= now)));
+        if (unusable) exclude('关联套餐不存在、未生效或已失效', true);
+        else if (remaining === null) exclude('套餐额度未知或不是美元额度');
+        else if (remaining <= 0 || remaining < settings.subscriptionMinimum) exclude(`订阅剩余低于 ${currencyFormat.format(settings.subscriptionMinimum)} 或已耗尽`, true);
       }
     } else if (!reason) {
+      if (!fresh(row?.balance, now)) exclude(row?.balance?.state === 'auth-required'
+        ? '余额查询需重新登录' : '余额无法确认或数据已过期');
+      else if (row.balance.currency !== 'USD' && !row.balance.unlimited) exclude('余额单位无法换算为美元');
+      else if (!row.balance.unlimited && !Number.isFinite(row.balance.amount)) exclude('余额未知');
+    }
+    if (!reason && item.source !== 'subscription') {
       remaining = row.balance.unlimited ? Infinity : row.balance.amount;
-      if (remaining <= 0 || remaining < settings.balanceMinimum) reason = `余额低于 ${currencyFormat.format(settings.balanceMinimum)} 或已耗尽`;
+      if (remaining <= 0 || remaining < settings.balanceMinimum) exclude(`余额低于 ${currencyFormat.format(settings.balanceMinimum)} 或已耗尽`, true);
     }
     return { ...item, merchantId: key?.merchantId, currentHealth: state.current, healthRank: state.rank,
+      fundingState, fundingReason: reason, healthReason: state.reason,
       qualified: !reason, eligible: !reason && state.rank !== null, reason: reason || state.reason,
       remaining: Number.isFinite(remaining) ? remaining : null, unlimited: remaining === Infinity,
       sampleAt: row?.channels?.[0]?.last?.at ?? row?.last?.at ?? null };
@@ -120,4 +137,4 @@ function choose(candidates, activeName) {
     (a.name === activeName ? -1 : b.name === activeName ? 1 : a.name.localeCompare(b.name)))[0] || null;
 }
 
-module.exports = { defaults, validateSettings, health, evaluate, choose, subscriptionRemaining, GRACE_MS, WINDOW_MS, REFRESH_MS };
+module.exports = { defaults, validateSettings, health, evaluate, choose, subscriptionRemaining, WINDOW_MS, REFRESH_MS };

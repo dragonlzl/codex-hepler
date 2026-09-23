@@ -29,7 +29,7 @@
             <section id="current-route" class="current-route" aria-label="当前使用"><span class="current-dot" aria-hidden="true"></span><span class="current-route-label">当前使用</span><button id="current-route-name" type="button" disabled>正在读取…</button><span id="current-route-mode" class="mode-tag"></span><a href="#connection" class="text-link">连接设置 ↗</a></section>
             <div class="route-controls">
             <section class="auto-panel" aria-labelledby="auto-title">
-              <div class="auto-heading"><div><h2 id="auto-title">自动切换</h2><p>中转商优先 · 先绿色，再优先级 · 故障持续 3 分钟后换站</p></div><label class="auto-toggle"><input id="auto-enabled" type="checkbox" role="switch" disabled /><span>开启自动切换</span></label></div>
+              <div class="auto-heading"><div><h2 id="auto-title">自动切换</h2><p>中转商优先 · 先绿色，再优先级 · 确认不可用立即换站，查询异常保留当前</p></div><label class="auto-toggle"><input id="auto-enabled" type="checkbox" role="switch" disabled /><span>开启自动切换</span></label></div>
               <div class="auto-summary"><p id="auto-status" role="status" aria-live="polite">正在读取设置…</p><button id="auto-settings-open" type="button" disabled>设置优先级池</button></div>
               <p id="auto-last-switch" class="auto-help"></p>
               <details id="auto-candidates"><summary>候选资格与排除原因</summary><ul id="auto-candidate-list"></ul></details>
@@ -148,10 +148,10 @@
           <label>订阅保留额度 M（美元）<input name="subscriptionMinimum" type="number" min="0" max="1000000000000" step="any" required /></label>
           <label>余额保留金额 N（美元）<input name="balanceMinimum" type="number" min="0" max="1000000000000" step="any" required /></label>
         </div>
-        <p class="auto-help">M/N 为全局设置，低于才跳过，等于仍可使用。订阅满足 M 时优先使用该商的订阅入口，否则检查余额入口。未授权、授权过期或余额无法确认的入口自动排除。</p>
+        <p class="auto-help">M/N 为全局设置，低于才跳过，等于仍可使用。订阅满足 M 时优先使用该商的订阅入口，否则检查余额入口。切入候选须能确认所用额度；当前入口仅因查询失败或网页登录过期时继续使用，确认额度不足或套餐失效后才切换。</p>
         <p class="auto-help">请选择已在中转商处配置好扣费方式的 Key / 地址，并将订阅入口关联到它实际使用的套餐。本工具通过换入口切换扣费来源，不修改中转商后台设置。次数和积分额度无法换算美元时会跳过。</p>
         <div id="auto-pool-editor"></div>
-        <p class="auto-help">检测模型应与实际调用模型一致，此处不会修改请求模型。恢复判断使用最近 3 分钟内的检测；单格超过 3 分钟时取最近一格。服务运行期间后台每 15 秒检查，关闭页面仍生效。手动换站会关闭自动切换。</p>
+        <p class="auto-help">检测模型应与实际调用模型一致，此处不会修改请求模型。有效检测明确不可用或实际调用失败时，有合格候选就立即切换；查询失败、样本过期、缺少数据或网页登录失效只提示并继续检测，不因此切换当前入口。网页登录失效不等于调用 API Key 失效。最近 3 分钟的恢复判断仅用于候选重新入选，不延迟故障切出；单格超过 3 分钟时取最近一格。服务运行期间后台每 15 秒检查，关闭页面仍生效。手动换站会关闭自动切换。</p>
         <p id="auto-settings-feedback" role="status" aria-live="polite"></p>
         <div class="edit-actions"><button id="auto-settings-cancel" type="button">取消</button><button id="auto-settings-save" class="secondary" type="submit">保存设置</button></div>
       </form>

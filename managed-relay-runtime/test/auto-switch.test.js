@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { defaults, validateSettings, health, evaluate, choose, GRACE_MS, WINDOW_MS, subscriptionRemaining } = require('../auto-switch-policy');
+const { defaults, validateSettings, health, evaluate, choose, WINDOW_MS, subscriptionRemaining } = require('../auto-switch-policy');
 const { ConfigStore } = require('../config-store');
 const { AutoSwitch } = require('../auto-switch');
 const { start } = require('../../managed-relay-server');
@@ -49,15 +49,19 @@ test('subscription wins within merchant; exact M/N boundaries pass, zero never p
   assert.equal(evaluate(config, keys, rows, epoch).at(-1).eligible, false);
 });
 
-test('unknown/stale balance excludes even a funded subscription; API-key balance needs no extra website login', () => {
+test('balance routes need fresh balance while subscription routes survive transient balance failures', () => {
+  const balanceConfig = settings();
+  const balance = row('A');
+  for (const state of ['auth-required', 'error', 'stale', 'loading']) {
+    balance.balance.state = state;
+    assert.equal(evaluate(balanceConfig, keys, [balance], epoch)[0].eligible, false);
+  }
   const config = settings(); config.pool = [{ name: 'A 订阅', priority: 1, source: 'subscription', subscriptionId: 42 }];
   const subscription = row('A 订阅'); subscription.subscriptions = { state: 'available', fetchedAt: epoch, items: [plan()] };
   for (const state of ['auth-required', 'error', 'stale', 'loading']) {
     subscription.balance.state = state;
-    assert.equal(evaluate(config, keys, [subscription], epoch)[0].eligible, false);
+    assert.equal(evaluate(config, keys, [subscription], epoch)[0].eligible, true);
   }
-  subscription.balance = { state: 'available', currency: 'USD', amount: 10, fetchedAt: epoch - 90000 };
-  assert.equal(evaluate(config, keys, [subscription], epoch)[0].eligible, false);
   const keyBalance = row('A'); keyBalance.balance = { ...keyBalance.balance, kind: 'packy-key', refreshMs: 1800000 };
   assert.equal(evaluate(settings(), keys, [keyBalance], epoch)[0].eligible, true);
 });
@@ -144,23 +148,61 @@ async function fixture(t) {
     setRequest: value => { request = value; }, calls: () => calls };
 }
 
-test('persistent red waits exactly three minutes, all failed keeps last route and recovery preempts', async t => {
-  assert.equal(GRACE_MS, 180000);
+test('current red switches immediately, all failed keeps last route and recovery preempts', async t => {
   const f = await fixture(t);
   f.setRows([row('A', epoch, 'unavailable'), row('B'), row('C')]);
-  await f.auto.tick(); assert.equal(f.auto.snapshot().phase, 'waiting');
-  f.setNow(epoch + GRACE_MS - 1); f.setRows([row('A', epoch + GRACE_MS - 1, 'unavailable'), row('B', epoch + GRACE_MS - 1), row('C', epoch + GRACE_MS - 1)]);
-  await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'A');
-  f.setNow(epoch + GRACE_MS); await f.auto.tick();
-  assert.equal((await f.store.activeEntry()).name, 'B'); assert.equal(f.events.length, 1);
-  f.setNow(epoch + GRACE_MS + 1); f.setRows(keys.map(key => row(key.name, epoch + GRACE_MS + 1, 'unavailable')));
-  await f.auto.tick(); f.setNow(epoch + 2 * GRACE_MS + 1); f.setRows(keys.map(key => row(key.name, epoch + 2 * GRACE_MS + 1, 'unavailable')));
+  await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'B'); assert.equal(f.events.length, 1);
+  assert.equal(f.auto.snapshot().waitUntil, null);
+  assert.equal(f.events[0].at, new Date(epoch).toISOString());
+  assert.match(f.events[0].switchReason, /当前渠道不可用，立即切换/);
+  f.setNow(epoch + 1); f.setRows(keys.map(key => row(key.name, epoch + 1, 'unavailable')));
   await f.auto.tick(); assert.equal(f.auto.snapshot().phase, 'no-candidate'); assert.equal((await f.store.activeEntry()).name, 'B');
-  f.setRows([row('A', epoch + 2 * GRACE_MS + 1), row('B', epoch + 2 * GRACE_MS + 1, 'unavailable')]);
+  f.setRows([row('A', epoch + 1), row('B', epoch + 1, 'unavailable')]);
   await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'A');
 });
 
-test('status refresh failure waits three minutes, recovery cancels it and later failures start fresh', async t => {
+test('unavailable INPUT immediately selects a healthy Krill subscription from the screenshot scenario', async t => {
+  const f = await fixture(t);
+  for (const name of ['Krill 周卡', 'Krill 月卡']) await f.store.add({
+    name, value: 'sk-fixture-' + (name.includes('周') ? 'weekly' : 'monthly'),
+    baseurl: 'https://api-slb.krill-code.net/codex/v1',
+  });
+  const config = settings();
+  config.pool = [{ name: 'A', priority: 2, source: 'balance' },
+    ...['Krill 周卡', 'Krill 月卡'].map(name => ({ name, priority: 1, source: 'subscription', subscriptionId: 42 }))];
+  await f.save(config);
+  const subscriptions = config.pool.slice(1).map(({ name }) => ({ ...row(name),
+    subscriptions: { state: 'available', fetchedAt: epoch, items: [plan(10)] } }));
+  f.setRows([row('A', epoch, 'unavailable'), ...subscriptions]);
+  await f.auto.tick();
+  const runtime = f.auto.snapshot();
+  assert.ok(subscriptions.some(item => item.name === runtime.lastSwitch.to));
+  assert.equal(runtime.lastSwitch.from, 'A');
+  assert.equal(runtime.lastSwitch.at, epoch);
+  assert.equal(runtime.lastSwitch.source, 'subscription');
+  assert.equal(runtime.phase, 'active');
+  assert.equal(runtime.waitUntil, null);
+  assert.equal((await f.store.activeEntry()).name, runtime.lastSwitch.to);
+});
+
+test('unknown status retains the incumbent without qualifying it as a new candidate', async t => {
+  for (const patch of [{ state: 'no-data' }, { state: 'stale' }, { state: 'error' }, { state: 'auth-required' },
+    { last: point(epoch - WINDOW_MS - 1) }, { last: point(epoch, 'no-data') }, { requiresLogin: true },
+    { referenceOnly: true }, { channels: [] }, { channels: [{ state: 'auth-required' }] }]) {
+    const f = await fixture(t);
+    f.setRows([{ ...row('A'), ...patch }, row('B')]);
+    await f.auto.tick();
+    assert.equal((await f.store.activeEntry()).name, 'A');
+    assert.equal(f.auto.snapshot().waitUntil, null);
+    assert.equal(f.auto.snapshot().phase, 'unconfirmed');
+    assert.equal(f.auto.snapshot().lastSwitch, null);
+    assert.equal(f.auto.snapshot().candidates[0].eligible, false);
+    assert.equal(f.auto.snapshot().candidates[0].currentHealth, 'unknown');
+    assert.equal(f.events.length, 0);
+  }
+});
+
+test('status refresh failures retain the incumbent even after three minutes and recovery resumes ranking', async t => {
   const fixtureState = await fixture(t);
   const failedRows = now => {
     const failed = row('A', now);
@@ -169,43 +211,71 @@ test('status refresh failure waits three minutes, recovery cancels it and later 
     return [failed, row('B', now)];
   };
   fixtureState.setRows(failedRows(epoch)); await fixtureState.auto.tick();
-  assert.equal(fixtureState.auto.snapshot().phase, 'waiting');
+  assert.equal(fixtureState.auto.snapshot().phase, 'unconfirmed');
+  assert.equal(fixtureState.auto.snapshot().waitUntil, null);
   assert.match(fixtureState.auto.snapshot().candidates[0].reason, /状态查询失败.*查询超时/);
   assert.equal((await fixtureState.store.activeEntry()).name, 'A');
-  fixtureState.setNow(epoch + 60000); fixtureState.setRows([row('A', epoch + 60000), row('B', epoch + 60000)]);
-  await fixtureState.auto.tick(); assert.equal(fixtureState.auto.snapshot().waitUntil, null);
-  const restarted = epoch + 120000;
-  fixtureState.setNow(restarted); fixtureState.setRows(failedRows(restarted)); await fixtureState.auto.tick();
-  assert.equal(fixtureState.auto.snapshot().waitUntil, restarted + GRACE_MS);
-  fixtureState.setNow(restarted + GRACE_MS - 1); fixtureState.setRows(failedRows(restarted + GRACE_MS - 1));
-  await fixtureState.auto.tick(); assert.equal((await fixtureState.store.activeEntry()).name, 'A');
-  fixtureState.setNow(restarted + GRACE_MS); await fixtureState.auto.tick();
+  fixtureState.setNow(epoch + WINDOW_MS + 1);
+  fixtureState.setRows(failedRows(epoch + WINDOW_MS + 1)); await fixtureState.auto.tick();
+  assert.equal((await fixtureState.store.activeEntry()).name, 'A');
+  assert.equal(fixtureState.events.length, 0);
+  fixtureState.setRows([row('A', epoch + WINDOW_MS + 1, 'degraded'), row('B', epoch + WINDOW_MS + 1)]);
+  await fixtureState.auto.tick();
   assert.equal((await fixtureState.store.activeEntry()).name, 'B');
-  assert.equal(fixtureState.events.length, 1);
-  assert.match(fixtureState.events[0].switchReason, /状态持续无法确认已满 3 分钟/);
+  assert.match(fixtureState.events[0].switchReason, /绿色候选优先/);
 });
 
-test('recovery cancels grace, later outage starts a new three-minute wait', async t => {
+test('subscription entry remains eligible when its balance refresh fails', async t => {
+  const f = await fixture(t); const config = settings();
+  config.pool = [{ name: 'A 订阅', priority: 1, source: 'subscription', subscriptionId: 42 }, { name: 'B', priority: 2, source: 'balance' }];
+  await f.save(config);
+  const subscription = row('A 订阅', epoch, 'available', 10);
+  subscription.balance = { state: 'stale', amount: 10, currency: 'USD', fetchedAt: epoch - 60000,
+    failure: { code: 'REFRESH_TIMEOUT', message: '查询超时' } };
+  subscription.subscriptions = { state: 'available', fetchedAt: epoch, items: [plan(10)] };
+  f.setRows([row('A'), row('B'), subscription]);
+  await f.auto.tick();
+  assert.equal((await f.store.activeEntry()).name, 'A 订阅');
+  assert.equal(f.auto.snapshot().candidates.find(item => item.name === 'A 订阅').eligible, true);
+});
+
+test('a later outage switches immediately after recovery', async t => {
   const f = await fixture(t);
   f.setRows([row('A', epoch, 'unavailable'), row('B')]); await f.auto.tick();
+  assert.equal((await f.store.activeEntry()).name, 'B');
   f.setNow(epoch + 60000); f.setRows([row('A', epoch + 60000), row('B', epoch + 60000)]); await f.auto.tick();
   assert.equal(f.auto.snapshot().phase, 'active');
   f.setNow(epoch + 120000); f.setRows([row('A', epoch + 120000, 'unavailable'), row('B', epoch + 120000)]); await f.auto.tick();
-  assert.equal(f.auto.snapshot().waitUntil, epoch + 120000 + GRACE_MS);
+  assert.equal((await f.store.activeEntry()).name, 'B');
+  assert.equal(f.auto.snapshot().waitUntil, null);
 });
 
-test('recovered incumbent is retained while old red history only blocks re-entry; shutdown cancels in-flight selection', async t => {
+test('recent red history blocks re-entry after failover; shutdown cancels in-flight selection', async t => {
   const f = await fixture(t);
   f.setRows([row('A', epoch, 'unavailable'), row('B')]); await f.auto.tick();
+  assert.equal((await f.store.activeEntry()).name, 'B');
   f.setNow(epoch + 60000);
   const recovered = row('A', epoch + 60000); recovered.history = [point(epoch, 'unavailable'), point(epoch + 60000)];
   f.setRows([recovered, row('B', epoch + 60000)]); await f.auto.tick();
-  assert.equal((await f.store.activeEntry()).name, 'A'); assert.equal(f.auto.snapshot().waitUntil, null);
+  assert.equal((await f.store.activeEntry()).name, 'B'); assert.equal(f.auto.snapshot().waitUntil, null);
   let entered, release; const started = new Promise(resolve => { entered = resolve; });
   f.setRequest(() => { entered(); return new Promise(resolve => { release = resolve; }); });
   const pending = f.auto.tick(); await started; f.auto.stop();
-  release({ rows: [row('A', epoch + 60000, 'available', 0), row('B', epoch + 60000)] });
-  await pending; assert.equal((await f.store.activeEntry()).name, 'A');
+  release({ rows: [row('A', epoch + 60000), row('B', epoch + 60000, 'available', 0)] });
+  await pending; assert.equal((await f.store.activeEntry()).name, 'B');
+});
+
+test('without an alternative, a recovered incumbent stays active despite its earlier red sample', async t => {
+  const f = await fixture(t);
+  f.setRows([row('A', epoch, 'unavailable'), row('B', epoch, 'unavailable')]);
+  await f.auto.tick();
+  assert.equal(f.auto.snapshot().phase, 'no-candidate');
+  const recovered = row('A', epoch + 60000);
+  recovered.history = [point(epoch, 'unavailable'), point(epoch + 60000)];
+  f.setNow(epoch + 60000); f.setRows([recovered, row('B', epoch + 60000)]);
+  await f.auto.tick();
+  assert.equal((await f.store.activeEntry()).name, 'A');
+  assert.equal(f.auto.snapshot().phase, 'active');
 });
 
 test('subscription reset restores merchant subscription ahead of its balance entry', async t => {
@@ -216,10 +286,60 @@ test('subscription reset restores merchant subscription ahead of its balance ent
   sub.subscriptions.items = [plan(10)]; await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'A 订阅');
 });
 
-test('authentication and balance failure bypass health grace; funded subscription does not require N', async t => {
-  const f = await fixture(t); const a = row('A'); a.balance.state = 'auth-required';
-  f.setRows([a, row('B')]); await f.auto.tick();
-  assert.equal((await f.store.activeEntry()).name, 'B'); assert.equal(f.auto.snapshot().waitUntil, null);
+test('website login or funding queries failing do not evict either type of current route', async t => {
+  for (const source of ['balance', 'subscription']) for (const resourceState of ['auth-required', 'error', 'stale', 'loading', 'expired-data', 'missing']) {
+    const f = await fixture(t), config = settings();
+    config.pool[0] = { ...config.pool[0], source, ...(source === 'subscription' ? { subscriptionId: 42 } : {}) };
+    await f.save(config);
+    const a = row('A');
+    a.subscriptions = { state: 'available', fetchedAt: epoch, items: [plan()] };
+    const resource = source === 'balance' ? 'balance' : 'subscriptions';
+    if (resourceState === 'missing') delete a[resource];
+    else if (resourceState === 'expired-data') a[resource].fetchedAt = epoch - 90000;
+    else a[resource].state = resourceState;
+    f.setRows([a, row('B')]); await f.auto.tick();
+    assert.equal((await f.store.activeEntry()).name, 'A', source + ': ' + resourceState);
+    assert.equal(f.auto.snapshot().phase, 'unconfirmed');
+    assert.equal(f.auto.snapshot().candidates[0].fundingState, 'unknown');
+    assert.equal(f.auto.snapshot().candidates[0].eligible, false);
+    assert.equal(f.events.length, 0);
+    // A fresh red sample remains sufficient evidence even when funding cannot be queried.
+    a.last = point(epoch, 'unavailable'); a.state = 'unavailable';
+    await f.auto.tick();
+    assert.equal((await f.store.activeEntry()).name, 'B');
+  }
+});
+
+test('actual API-key authentication and transport failures still switch when website login is expired', async t => {
+  for (const failure of [{ upstreamStatus: 401 }, { upstreamStatus: 403 }, { upstreamStatus: 429 }, { upstreamStatus: 503 }, { phase: 'connect', errorCode: 'ECONNRESET' }]) {
+    const f = await fixture(t);
+    const a = row('A'); a.balance.state = 'auth-required'; a.state = 'auth-required';
+    f.setRows([a, row('B')]); await f.auto.tick();
+    assert.equal((await f.store.activeEntry()).name, 'A');
+    const key = (await f.store.status()).keys.find(key => key.name === 'A');
+    f.auto.observe({ provider: 'A', routeId: key.naturalAccountId,
+      startedAt: new Date(epoch).toISOString(), at: new Date(epoch).toISOString(),
+      outcome: 'failed', status: 502, phase: 'response', ...failure });
+    await f.auto.tick();
+    assert.equal((await f.store.activeEntry()).name, 'B');
+    assert.equal(f.events.length, 1);
+    assert.equal(f.auto.snapshot().waitUntil, null);
+  }
+});
+
+test('confirmed insufficient funding or invalid subscription still switches while monitoring is unknown', async t => {
+  for (const funding of [{ source: 'balance', amount: 0 }, { source: 'balance', amount: 0.5 },
+    { source: 'subscription', plan: plan(0) }, { source: 'subscription', plan: { ...plan(), expiresAt: epoch } },
+    { source: 'subscription', plan: { ...plan(), state: 'frozen' } }, { source: 'subscription', plan: null }]) {
+    const f = await fixture(t), config = settings();
+    config.pool[0] = { ...config.pool[0], source: funding.source, ...(funding.source === 'subscription' ? { subscriptionId: 42 } : {}) };
+    await f.save(config);
+    const a = row('A', epoch, 'error', funding.amount ?? 10);
+    a.subscriptions = { state: 'available', fetchedAt: epoch, items: funding.plan ? [funding.plan] : [] };
+    f.setRows([a, row('B')]); await f.auto.tick();
+    assert.equal((await f.store.activeEntry()).name, 'B');
+    assert.equal(f.auto.snapshot().candidates[0].fundingState, 'unavailable');
+  }
 });
 
 test('turning off while a monitor request is in flight prevents late route writes and further queries', async t => {
@@ -256,28 +376,27 @@ test('actual request failure is not cleared by unchanged green history, cancella
   const event = { provider: 'A', routeId: key.naturalAccountId, startedAt: new Date(epoch).toISOString(), at: new Date(epoch).toISOString(), outcome: 'failed', phase: 'connect', status: 502 };
   f.auto.observe({ ...event, status: 499, outcome: 'cancelled' }); await f.auto.tick(); assert.equal(f.auto.snapshot().phase, 'active');
   f.auto.observe({ ...event, phase: 'proxy-selection' }); await f.auto.tick(); assert.equal(f.auto.snapshot().phase, 'active');
-  f.auto.observe(event); await f.auto.tick(); assert.equal(f.auto.snapshot().phase, 'waiting');
-  f.setNow(epoch + GRACE_MS);
-  const unchanged = row('A', epoch + GRACE_MS);
+  f.auto.observe(event); await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'B');
+  f.setNow(epoch + 1000);
+  const unchanged = row('A', epoch + 1000);
   unchanged.last = point(epoch); unchanged.history = [point(epoch)]; unchanged.staleAfterMs = 900000;
-  f.setRows([unchanged, row('B', epoch + GRACE_MS)]);
+  f.setRows([unchanged, row('B', epoch + 1000)]);
   await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'B');
   await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'B');
-  f.setNow(epoch + GRACE_MS + 1); f.setRows(null);
+  f.setNow(epoch + WINDOW_MS + 1); f.setRows(null);
   await f.auto.tick(); assert.equal((await f.store.activeEntry()).name, 'A');
 });
 
-test('new healthy samples at the three-minute deadline cancel grace without switching', async t => {
+test('new healthy samples after the recovery window re-enable the failed route', async t => {
   const f = await fixture(t); await f.auto.tick();
   const key = (await f.store.status()).keys.find(key => key.name === 'A');
   f.auto.observe({ provider: 'A', routeId: key.naturalAccountId, startedAt: new Date(epoch).toISOString(),
     at: new Date(epoch).toISOString(), outcome: 'failed', phase: 'connect', status: 502 });
   await f.auto.tick();
-  f.setNow(epoch + 179999); await f.auto.tick();
-  assert.equal(f.auto.snapshot().phase, 'waiting');
-  assert.equal(f.auto.snapshot().waitUntil, epoch + GRACE_MS);
-  f.setNow(epoch + 180000); await f.auto.tick();
-  assert.equal(f.auto.snapshot().phase, 'active');
+  assert.equal((await f.store.activeEntry()).name, 'B');
+  f.setNow(epoch + WINDOW_MS - 1); await f.auto.tick();
+  assert.equal((await f.store.activeEntry()).name, 'B');
+  f.setNow(epoch + WINDOW_MS); await f.auto.tick();
   assert.equal(f.auto.snapshot().waitUntil, null);
   assert.equal((await f.store.activeEntry()).name, 'A');
 });
