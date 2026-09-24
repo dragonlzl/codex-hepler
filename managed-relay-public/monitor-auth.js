@@ -39,7 +39,7 @@ class MonitorAuthorization {
     if (this.busy) return;
     const sites = {
       blackaicoding: { name: 'code for me', origin: 'https://blackaicoding.com', description: '自动读取监控和账号余额。' },
-      input: { name: 'INPUT', origin: 'https://ai.input.im', description: '自动读取账号余额和订阅额度。公开可用性无需登录。' },
+      input: { name: 'INPUT', origin: 'https://ai.input.im', description: '自动读取三个号池的监控状态、API Key 所属号池、账号余额和订阅额度。' },
       aixor: { name: 'Aixor', origin: 'https://aixor.cc', description: '自动读取当前余额和未过期订阅。公开可用性无需登录。' },
       packycode: { name: 'Packycode', origin: 'https://www.packyapi.com', description: '请先阅读并勾选服务条款及相关政策，再完成人机验证。授权后自动读取控制台当前余额，每 15 秒随检测刷新。' },
       krill: { name: 'Krill', origin: 'https://www.krill-code.com', credentialName: 'krill_jwt', description: '自动读取个人账号余额、套餐状态和近 7 天用量。公开可用性无需登录。' },
@@ -61,7 +61,7 @@ class MonitorAuthorization {
     document.querySelector('#monitor-auth-title').textContent = settings.name + ' · ' + (name || '账号授权');
     document.querySelector('#monitor-auth-description').textContent = '使用 ' + settings.name + ' 账号登录，' + settings.description + ' 本次授权供该账号及设为同一账号的绑定配置共用，重新登录或清除授权会作用于整个共用账号。';
     const link = document.querySelector('#monitor-auth-site');
-    link.href = settings.origin + (site === 'rightcode' ? '/dashboard' : site === 'timicc' ? '/usage' : site === 'aigo' ? '/monitor' : '/'); link.textContent = settings.name;
+    link.href = settings.origin + (site === 'rightcode' ? '/dashboard' : site === 'timicc' ? '/usage' : ['input', 'aigo'].includes(site) ? '/monitor' : '/'); link.textContent = settings.name;
     document.querySelector('#monitor-auth-origin').textContent = settings.origin;
     this.form.elements.username.placeholder = settings.name + ' 账号或邮箱';
     const session = ['aixor', 'packycode'].includes(site);

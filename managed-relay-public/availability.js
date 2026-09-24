@@ -1,5 +1,5 @@
 class RelayAvailability {
-  constructor({ list, select, getState, getView = () => 'advanced', isDragging, onChange, mutateBalanceSource, mutateStatusMode, mutateAigoStatusMode }) {
+  constructor({ list, select, getState, getView = () => 'advanced', isDragging, onChange, mutateBalanceSource, mutateStatusMode, mutateAigoStatusMode, mutateInputStatusMode }) {
     Object.assign(this, { list, select, getState, getView, isDragging, onChange });
     this.model = 'gpt-6-astra';
     this.rows = new Map();
@@ -15,6 +15,7 @@ class RelayAvailability {
     this.packy = new PackyBalanceControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateBalanceSource });
     this.timicc = new TimiccStatusControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateStatusMode });
     this.aigo = new AigoStatusControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateStatusMode: mutateAigoStatusMode });
+    this.input = new AigoStatusControls(list, () => { this.reset(); this.paint(); this.refresh(); }, { getState, mutateStatusMode: mutateInputStatusMode, site: 'input' });
     this.expandedChannels = new Set();
     this.simpleCharts = new Set();
     try {
@@ -102,7 +103,7 @@ class RelayAvailability {
   reconcileRows(state) {
     const identities = new Map(state.keys.map(entry => {
       const key = JSON.stringify([entry.name, entry.baseurl]);
-      const mode = ['timicc', 'aigo'].includes(entry.merchantId)
+      const mode = ['input', 'timicc', 'aigo'].includes(entry.merchantId)
         ? this.getView() === 'simple' ? 'api-key' : entry.statusMode || 'all' : null;
       return [key, JSON.stringify([state.home, entry.revision, entry.naturalAccountId, entry.accountId,
         state.accountBindingsRevision, entry.balanceSource, mode])];
@@ -247,6 +248,8 @@ class RelayAvailability {
       if (modeControl) this.timicc.paint(modeControl, account.dataset.name);
       const aigoModeControl = account.querySelector('.aigo-status-mode');
       if (aigoModeControl) this.aigo.paint(aigoModeControl, account.dataset.name);
+      const inputModeControl = account.querySelector('.input-status-mode');
+      if (inputModeControl) this.input.paint(inputModeControl, account.dataset.name);
       const sourceControl = account.querySelector('.account-balance-source');
       if (sourceControl) this.packy.paintSource(sourceControl, account.dataset.name, status);
       const auth = account.querySelector('.account-auth');

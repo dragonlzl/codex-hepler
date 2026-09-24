@@ -135,7 +135,7 @@ test('authorization is required; no old public monitor or relay API keys are use
   monitor.close();
 });
 
-test('protected and public adapters isolate credentials; 401 retains only explicitly stale data', async () => {
+test('protected adapters isolate credentials; 401 retains only explicitly stale data', async () => {
   let now = NOW, fail = false;
   const calls = [];
   const monitor = new Availability({}, { clock: () => now, auth: { read: async () => ({ token: TOKEN }) }, request: async (url, options) => {
@@ -149,13 +149,12 @@ test('protected and public adapters isolate credentials; 401 retains only explic
       if (fail) throw Object.assign(new Error('secret must not leak'), { status: 401 });
       return fixture();
     }
-    assert.equal(options.token, undefined);
-    return { services: [{ model: MODELS[0], history: [{ ts: now / 1000, ok: true }] }] };
+    assert.fail('INPUT must not use code for me authorization');
   } });
   const [astra, sol] = await Promise.all([monitor.snapshot(keys), monitor.snapshot(keys, MODELS[1])]);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 2);
   assert.equal(astra.rows[0].state, 'unavailable');
-  assert.equal(astra.rows[2].state, 'available');
+  assert.equal(astra.rows[2].state, 'auth-required');
   assert.equal(sol.rows[0].uptimePct, 70);
   now += REFRESH_MS; fail = true;
   const expired = (await monitor.snapshot(keys)).rows[0];

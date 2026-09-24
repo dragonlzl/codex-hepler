@@ -253,6 +253,7 @@ async function start(options = {}) {
         else if (url.pathname === '/api/packycode/balance/source') result = await availability.changeBalanceSource(() => store.setPackyBalanceSource(payload));
         else if (url.pathname === '/api/timicc/status/mode') result = await availability.changeStatusMode(() => store.setTimiccStatusMode(payload));
         else if (url.pathname === '/api/aigo/status/mode') result = await availability.changeStatusMode(() => store.setAigoStatusMode(payload));
+        else if (url.pathname === '/api/input/status/mode') result = await availability.changeStatusMode(() => store.setInputStatusMode(payload));
         else if (url.pathname === '/api/network') result = await outbound.save(payload);
         else if (url.pathname === '/api/network/test') {
           const entry = await store.entry(payload.name);

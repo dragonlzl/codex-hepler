@@ -171,7 +171,7 @@ Krill 的普通、周卡、月卡入口是特殊情况：不同域名和路径�
 
 Packycode 每个子项独立选择余额来源，绑定后也保留各自的单选项，不累加余额。API Key 方式沿用共享信息来源配置的 Key；登录方式共享绑定账号的登录授权。解绑后恢复各 Key 的独立账号授权。
 
-多渠道状态（如派大星、timiCC）按每行两个号池排列，超过两个自动换行；单号池占满一行，号池区域过窄时自动改为单列。
+多渠道状态（如 INPUT、派大星、timiCC）按每行两个号池排列，超过两个自动换行；单号池占满一行，号池区域过窄时自动改为单列。
 
 timiCC 的号池展示按子项独立选择并显示在各子项下方：默认「全部号池」同时显示 Team/Plus 和 Pro，也可选择「跟随 API Key」。即使多个子项共用登录，跟随模式仍使用各子项自己保存的 Key 匹配分组。选择随配置保存，重命名后保留；列表可用性筛选优先使用当前启用的 timiCC 子项，没有启用项时使用排序后的第一个子项。
 
@@ -179,11 +179,11 @@ timiCC 的号池展示按子项独立选择并显示在各子项下方：默认�
 
 中转站列表提供全局「可用性模型」选择：默认 `gpt-6-astra`，可切换为 `gpt-5.6-sol`，浏览器会记住选择。该选择只控制站点状态展示，不修改 Codex 的请求模型。
 
-- 首个适配站点为 `ai.input.im`，按 Base URL 的域名自动识别，同站点的不同账号共用状态数据。
-- INPUT 的余额与订阅需要单独登录：点击 INPUT 下的「账号授权」，输入站点账号或邮箱、密码，工具调用 `https://ai.input.im/api/v1/auth/login`；返回的 `access_token` 即站点 Local Storage 中的 `auth_token`，后续请求使用 Bearer 授权。启用二次验证时，在同一窗口输入 6 位验证码。密码、刷新令牌和二次验证临时令牌不落盘，访问令牌单独保存到当前 Codex 目录的 `relay-ui-runtime/input-<accountId>-monitor-auth.json`（权限 `0600`），与 code for me 的授权隔离。
+- INPUT 适配 `ai.input.im`，按 Base URL 的域名自动识别。状态读取登录监控页 `https://ai.input.im/monitor` 使用的 `/api/v1/channel-monitors`，展示 **CodeX 余额-1、CodeX 余额-2、CodeX 余额-3** 三个独立号池，不再读取旧公开监控。两个模型选项共用号池状态，并注明源站实际探测模型。
+- INPUT 的监控、余额与订阅共用账号授权：点击 INPUT 下的「账号授权」，输入站点账号或邮箱、密码，工具调用 `https://ai.input.im/api/v1/auth/login`；返回的 `access_token` 即站点 Local Storage 中的 `auth_token`，后续请求使用 Bearer 授权。启用二次验证时，在同一窗口输入 6 位验证码。密码、刷新令牌和二次验证临时令牌不落盘，访问令牌单独保存到当前 Codex 目录的 `relay-ui-runtime/input-<accountId>-monitor-auth.json`（权限 `0600`），与 code for me 的授权隔离。
 - INPUT 同样支持手动授权：在窗口展开「无法登录？使用 auth_token 授权」，打开 `https://ai.input.im/` 并登录 → Chrome / Edge 开发者工具（F12；Mac 可用 ⌥⌘I）→ **Application（应用）** → **Local Storage（本地存储）** → `https://ai.input.im` → 复制 `auth_token` 的完整 **Value（值）** → 粘贴回工具并验证保存。只复制值，不含键名、引号或 Bearer 前缀。操作说明会随所选站点切换。
 - INPUT 的「登录账号余额」读取 dashboard 使用的 `/api/v1/auth/me`；「登录账号订阅」读取 `/api/v1/subscriptions`，展示全部套餐分组、状态、到期时间，以及日／周／月额度的已用量、限额、剩余量和重置时间，金额均为美元。不将订阅额度与余额相加，也不按当前监控模型筛掉其他订阅。重置规则跟随源页的滚动 24 小时、7 天、30 天窗口；不超过一天的套餐，日额度随套餐到期。无订阅、未登录、刷新失败分别提示。
-- INPUT 余额、订阅与公开监控随列表每 15 秒刷新，按中转账号和数据种类分别缓存，重复列表项及模型切换共用请求。账号授权失效不影响公开可用性展示；余额或订阅单独失败时保留对应上次数据并标注。清除或更换授权会清空该 Key 对应的旧账号数据。令牌仅发往 INPUT 固定的用户信息与订阅接口，绝不发送到公开的 `status.input.im` 或其他中转；只返回展示所需字段，不返回邮箱、用户信息或完整账号响应。
+- INPUT 状态、余额、订阅及 API Key 分组每 15 秒刷新，按授权账号和数据种类分别缓存，同账号别名及模型切换共用请求。请求失败保留对应历史并标注；授权失效后提示重新登录，不将旧样本作为当前可用性。清除或更换授权会清空该账号的旧数据。令牌仅发往 INPUT 固定监控、Key 列表、用户信息与订阅接口，绝不发送到 `status.input.im` 或其他中转；只返回展示所需字段，不返回邮箱、完整 Key 或完整账号响应。
 - `blackaicoding.com` / `www.blackaicoding.com`（code for me）改用主站 `/monitor` 的 V2 监控，不再读取旧的 `status.blackaicoding.com`。固定 `range=90m`、`platform=openai`、`group_id=2`、`group_by=platform_group_model`，并校验组名为「codex混合渠道--低价」。状态条沿用 `overall` 整体健康度和源站分格（目前 18 格、每格 5 分钟）；成功率按页面的 `1 - error_rate` 计算，缺失时段留灰，另显示平均首 Token 延迟、平均延迟和缓存率。
 - code for me 的 `gpt-5.6-sol` 只取独立模型分类；`gpt-6-astra` 优先匹配独立分类，源站未单列时展示同分组的 `__other__`，明确标为「OpenAI · 其他模型（参考）」。该汇总不能证明 gpt6 的独立可用性；若精确分类存在但无数据，也不会回退混用其他模型。
 - code for me 的 V2 接口需要登录访问令牌。点击该中转账号下的「登录账号」或「账号授权」后，优先填写站点账号和密码，工具会调用站点登录接口并自动验证监控权限；密码只在本次请求中使用，不保存。若账号开启二次验证，会在同一窗口输入身份验证器的 6 位验证码。成功后只保存访问令牌到当前 Codex 目录的 `relay-ui-runtime/blackaicoding-<accountId>-monitor-auth.json`（文件权限 `0600`，不入库），不保存刷新令牌或二次验证临时凭据。
@@ -203,8 +203,10 @@ timiCC 的号池展示按子项独立选择并显示在各子项下方：默认�
 - Packycode 余额设置保存在当前 Codex 目录的 `relay-ui-runtime/packycode-balance.json`，只保存 `api_base_url`、`request_timeout_seconds`（默认 10）和 `refresh_interval_seconds`（默认 1800）。复用已有中转列表中的 Key，无需重复填写；真实 Key 不返回浏览器、不写入前端代码或日志。按「查询接口 + Key」缓存，不同 Key 分开，同 Key 的重复中转、不同模型和多个浏览器共用查询；更换 Key 不会继承旧 Key 的余额，切换 Codex 目录或查询地址会取消旧查询。
 - Packycode 余额按 **500000 quota = 1 USD** 换算。当前余额直接取 `total_available`，最大金额取 `total_granted`，百分比为前者除以后者并限制在 0～100%；最大额度为 0 时显示「—」。支持 `data` 内或根对象、下划线／驼峰字段和有限非负数字字符串。`total_used` 不作为当前余额的减数，页面不将它标成「本期已用」。无限 Key 直接显示「无限额度」；实测无限模式会返回负数占位值，因此不转换无限模式的数字字段，有限模式仍拒绝负数和无效数据。
 - Packycode 余额默认每 **30 分钟**查询，支持「刷新余额」；可用性仍每 15 秒刷新。首次失败后最多重试 3 次，默认等待 1／3／5 秒；HTTP 429 有正数 `Retry-After` 时优先使用，最多 60 秒。查询与重试在后台执行，页面只读取缓存，查询中会短暂轮询进度；不阻塞其他站点和可用性展示。失败保留上次成功余额及时间并标记未更新，首次失败显示未知，不显示为零。页面隐藏后暂停轮询，服务关闭、切换目录或更改查询地址会取消请求和重试。未迁移飞书通知、阈值或通知状态逻辑。
-- 每 15 秒读取公开状态接口 `https://status.input.im/api/status`，展示所选模型最近 60 个样本、可用率和采样时间。绿色表示成功，红色表示失败，悬停可查看时间、延迟及错误。状态源目前约每分钟采样一次，页面刷新不会增加样本，也不消耗中转 API Key。
-- 可用性状态条来自站点监控，不代表账号额度或密钥可用性。INPUT 的公开状态无需登录；INPUT 的余额、订阅，以及 code for me 的监控、余额，使用各自的本机账号授权。
+- INPUT 完整管理为每个子项提供「全部号池 / 跟随 API Key」，默认全部号池，三个状态全部展开，当前 Key 对应号池置顶。选择保存于 `relay-ui-state.json` 的 `inputStatusModes`，重命名后保留；同账号的不同 Key 独立选择。简洁列表和自动切换始终跟随各自 API Key，不改动完整管理的已保存选择。
+- INPUT 通过授权分页读取 `/api/v1/keys?page=N&page_size=100`，后端使用完整 Key 精确匹配，缓存仅保留 Key 哈希、分组名与号池。分组名只规范大小写、空格、全角字符，严格匹配三个监控名称；未知分组（包括没有对应监控的订阅分组）、Key 不属于当前账号或查询失败时显示原因，不借用其他号池。
+- INPUT 各池独立展示最近 60 次检测、源站 7 天可用率、对话延迟和端点 PING。绿色表示正常、黄色表示降级、红色表示异常；源站约每分钟探测，超过 3 分钟无新样本标为过期，工具刷新不增加样本，也不消耗模型调用额度。
+- 可用性状态条来自站点监控，不代表账号额度或密钥可用性。INPUT 的监控、余额和订阅，以及 code for me 的监控和余额，使用各自的本机账号授权。
 - Krill 的登录内页 `/app/status` 与公开页 `https://www.krill-code.com/status` 共用 `/api/public/channel-status?hours=24`，无需账号、Cookie、token 或 API Key。适配 `krill-code.com`、`www.krill-code.com`、`api-slb.krill-code.net` 和 `api.cdn-krill-ai.com`，普通、周卡、月卡共享站点状态。只按官方模型 ID 匹配，24 小时分为 72 个 20 分钟格，同格按故障 > 降级 > 正常聚合，无数据留灰；当前状态单独取源站 `current_status`。显示首 Token 延迟、吞吐 P50 和缓存率，不将状态格换算成请求成功率。UTC 采样时间超过 5 分钟标为过期；源站固定状态会明确标注。源页首 Token 指标的 P90 文案与接口 `ttft_p99_ms` 命名不一致，因此仅标为首 Token 延迟，保留原值。
 - Krill 个人账号的余额和套餐通过「账号授权」登录：`POST https://www.krill-code.com/api/auth/login` 接收邮箱和密码，返回的 `token` 即 Local Storage 中的 `krill_jwt`。若返回 `requires_totp`，继续调用 `/api/auth/login/totp`，传入暂存于服务内存的 `pending_token` 和 6 位验证码。访问令牌独立保存在当前 Codex 目录的 `relay-ui-runtime/krill-<accountId>-monitor-auth.json`（权限 `0600`），不保存密码，不向公开监控或中转 API 域名发送令牌。
 - Krill 手动授权：登录 `https://www.krill-code.com/` → Chrome / Edge 开发者工具（F12；Mac：⌥⌘I）→ **Application → Local Storage → https://www.krill-code.com** → 复制 **krill_jwt** 的完整值 → 回到工具验证保存。不复制 `krill_user`，不带键名、引号或 Bearer 前缀。登录或手动授权成功后自动关闭弹窗并弹出中央 Toast；错误保留在弹窗。

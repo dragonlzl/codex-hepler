@@ -16,6 +16,8 @@ const timiccStatus = require('./availability-timicc');
 const timiccKeys = require('./timicc-key-groups');
 const aigoStatus = require('./availability-aigo');
 const aigoKeys = require('./aigo-key-groups');
+const inputStatus = require('./availability-input');
+const inputKeys = require('./input-key-groups');
 const { BrowserLogin } = require('./browser-login');
 const aixor = require('./account-aixor');
 const krill = require('./account-krill');
@@ -33,40 +35,16 @@ const STALE_MS = 180000;
 const TIMICC_BALANCE_ENDPOINT = 'https://timicc.com/api/v1/auth/me';
 const AIGO_BALANCE_ENDPOINT = 'https://api.aigo0.com/api/v1/auth/me';
 
-function sample(value) {
-  if (!value || !Number.isFinite(value.ts) || value.ts <= 0 || value.ts > 8640000000000 || typeof value.ok !== 'boolean') {
-    throw new Error('Invalid status sample');
-  }
-  return {
-    at: value.ts * 1000, ok: value.ok,
-    latencyMs: Number.isFinite(value.latency_ms) && value.latency_ms >= 0 ? value.latency_ms : null,
-    error: typeof value.error === 'string' ? value.error.slice(0, 500) : null,
-  };
-}
-
-function readInputStatus(data) {
-  if (!Array.isArray(data?.services)) throw new Error('Invalid status response');
-  const models = {};
-  for (const model of MODELS) {
-    const service = data.services.find(item => item?.model === model);
-    if (!service) continue;
-    if (!Array.isArray(service.history)) throw new Error('Invalid status history');
-    const history = service.history.map(sample).sort((a, b) => a.at - b.at).slice(-HISTORY_LENGTH);
-    const last = service.last == null ? history.at(-1) || null : sample(service.last);
-    models[model] = {
-      history, last,
-      uptimePct: history.length ? history.filter(item => item.ok).length / history.length * 100 : null,
-    };
-  }
-  return models;
-}
-
 // Account adapters use site login credentials. Packycode key balances have a separate transport.
 const ADAPTERS = Object.freeze([{
   id: 'input', hosts: ['ai.input.im'],
-  source: { name: 'AI.INPUT.IM', url: 'https://status.input.im/' },
-  endpoint: 'https://status.input.im/api/status',
-  parse: readInputStatus,
+  source: { name: 'INPUT', url: 'https://ai.input.im/monitor' },
+  endpoint: inputStatus.ENDPOINT,
+  requiresAuthorization: true,
+  accountScopedStatus: true,
+  parse: (data, now) => inputStatus.readInputStatus(data, MODELS, now),
+  snapshot: inputStatus.channelSnapshot,
+  keys: { endpoint: inputKeys.keyEndpoint(1), load: inputKeys.readKeyGroups, hash: inputKeys.keyHash, parse: value => value, requiresAuthorization: true },
   balance: { endpoint: INPUT_BALANCE_ENDPOINT, parse: readInputBalance, requiresAuthorization: true },
   subscriptions: { endpoint: INPUT_SUBSCRIPTIONS_ENDPOINT, parse: readInputSubscriptions, requiresAuthorization: true },
   verifyAuthorization: { endpoint: INPUT_BALANCE_ENDPOINT, parse: readInputBalance },
@@ -143,7 +121,7 @@ const ADAPTERS = Object.freeze([{
   accountScopedStatus: true,
   parse: (data, now) => aigoStatus.readAigoStatus(data, MODELS, now),
   snapshot: aigoStatus.channelSnapshot,
-  keys: { endpoint: aigoKeys.keyEndpoint(1), load: aigoKeys.readKeyGroups, parse: value => value, requiresAuthorization: true },
+  keys: { endpoint: aigoKeys.keyEndpoint(1), load: aigoKeys.readKeyGroups, hash: aigoKeys.keyHash, parse: value => value, requiresAuthorization: true },
   balance: { endpoint: AIGO_BALANCE_ENDPOINT, parse: readBlackaicodingBalance, requiresAuthorization: true },
   verifyAuthorization: { endpoint: AIGO_BALANCE_ENDPOINT, parse: readBlackaicodingBalance },
 }]);
@@ -157,14 +135,14 @@ function adapterFor(baseurl) {
 }
 
 function requestContent(url, { outbound, signal, token, json, site = 'blackaicoding', session, captureCookies }, accept) {
-  const targets = { blackaicoding: [BLACKAICODING_ENDPOINT, BLACKAICODING_BALANCE_ENDPOINT], input: [INPUT_BALANCE_ENDPOINT, INPUT_SUBSCRIPTIONS_ENDPOINT],
+  const targets = { blackaicoding: [BLACKAICODING_ENDPOINT, BLACKAICODING_BALANCE_ENDPOINT], input: [INPUT_BALANCE_ENDPOINT, INPUT_SUBSCRIPTIONS_ENDPOINT, inputStatus.ENDPOINT],
     krill: [krill.IDENTITY_ENDPOINT, krill.BALANCE_ENDPOINT, krill.SUBSCRIPTIONS_ENDPOINT, krill.USAGE_ENDPOINT], rightcode: [rightcode.BALANCE_ENDPOINT],
     timicc: [TIMICC_BALANCE_ENDPOINT], aigo: [AIGO_BALANCE_ENDPOINT] };
   const usageQuery = site === 'krill' && url === krill.USAGE_ENDPOINT && token && !session;
   const aixorTargets = [aixor.BALANCE_ENDPOINT, aixor.SUBSCRIPTIONS_ENDPOINT, aixor.PLANS_ENDPOINT];
   const sessionTargets = site === 'aixor' ? aixorTargets : site === 'packycode' ? [packy.BALANCE_ENDPOINT] : [];
   const loginTarget = Object.hasOwn(ACCOUNT_SITES, site) && (site === 'packycode' ? packy.isLoginUrl(url) : Object.values(loginEndpoints(site)).includes(url));
-  if (token && !targets[site]?.includes(url) && !(site === 'timicc' && timiccKeys.isKeyEndpoint(url)) && !(site === 'aigo' && (aigoKeys.isKeyEndpoint(url) || aigoStatus.isMonitorEndpoint(url)))) return Promise.reject(new Error('Monitor credential target rejected'));
+  if (token && !targets[site]?.includes(url) && !(site === 'input' && inputKeys.isKeyEndpoint(url)) && !(site === 'timicc' && timiccKeys.isKeyEndpoint(url)) && !(site === 'aigo' && (aigoKeys.isKeyEndpoint(url) || aigoStatus.isMonitorEndpoint(url)))) return Promise.reject(new Error('Monitor credential target rejected'));
   if (session && (!ACCOUNT_SITES[site]?.session || token || !(json === undefined ? sessionTargets : [loginEndpoints(site).totp]).includes(url))) return Promise.reject(new Error('Session credential target rejected'));
   if (captureCookies && (!ACCOUNT_SITES[site]?.session || !loginTarget || json === undefined)) return Promise.reject(new Error('Login cookie target rejected'));
   if (json !== undefined && !usageQuery && (token || !loginTarget)) return Promise.reject(new Error('Login credential target rejected'));
@@ -351,9 +329,10 @@ class Availability {
       modelNote: '跟随 API Key 分组「' + groupName + '」；gpt-6-astra 与 gpt-5.6-sol 共用该号池状态。' };
   }
 
-  async selectAigoPools(status, entry, groups) {
+  async selectAccountPools(status, entry, groups, adapter) {
+    const collapsibleChannels = adapter.id === 'aigo';
     const unknown = (message, extra = {}) => ({ ...status, statusMode: 'api-key', channels: [], state: 'no-data', message, modelNote: message, ...extra });
-    const all = (extra = {}) => ({ ...status, statusMode: 'all', collapsibleChannels: true, ...extra });
+    const all = (extra = {}) => ({ ...status, statusMode: 'all', collapsibleChannels, ...extra });
     let key;
     try { key = await this.getEntry(entry.name); } catch { key = null; }
     if (typeof key?.value !== 'string' || !key.value) {
@@ -362,16 +341,16 @@ class Availability {
     if (entry.naturalAccountId && naturalAccountId(key) !== entry.naturalAccountId) {
       return entry.statusMode === 'api-key' ? unknown('API Key 已变更，请刷新列表。') : all({ modelNote: '无法确认当前 API Key 分组，全部号池按指定顺序展示。' });
     }
-    if (groups?.authRequired) return entry.statusMode === 'api-key' ? unknown('请登录派大星账号，以识别该 API Key 的号池。', { requiresLogin: true }) : all({ modelNote: '请登录派大星账号，以将当前 API Key 对应号池置顶。' });
+    if (groups?.authRequired) return entry.statusMode === 'api-key' ? unknown('请登录' + adapter.source.name + '账号，以识别该 API Key 的号池。', { requiresLogin: true }) : all({ modelNote: '请登录' + adapter.source.name + '账号，以将当前 API Key 对应号池置顶。' });
     if (groups?.error) return entry.statusMode === 'api-key' ? unknown('API Key 号池查询失败，请检查网络或授权后重试；可切换为全部号池。', { failure: groups.failure || { message: 'API Key 号池查询失败' } }) : all({ modelNote: 'API Key 号池暂时无法确认，全部号池按指定顺序展示。' });
-    const group = groups?.value?.[aigoKeys.keyHash(key.value)];
+    const group = groups?.value?.[adapter.keys.hash(key.value)];
     if (!group) return entry.statusMode === 'api-key' ? unknown('未在授权账号中找到该 API Key，请登录对应账号；可切换为全部号池。') : all({ modelNote: '未找到当前 API Key 的号池，全部号池按指定顺序展示。' });
     const groupName = String(group.groupName || '').replaceAll(key.value, '[已隐藏]');
-    if (!group.pool) return entry.statusMode === 'api-key' ? unknown('该 API Key 的号池' + (groupName ? '「' + groupName + '」' : '') + '不在已配置的派大星监测范围内；可切换为全部号池。') : all({ modelNote: '当前 API Key 不属于已配置监测号池，全部号池按指定顺序展示。' });
+    if (!group.pool) return entry.statusMode === 'api-key' ? unknown('该 API Key 的号池' + (groupName ? '「' + groupName + '」' : '') + '不在已配置的' + adapter.source.name + '监测范围内；可切换为全部号池。') : all({ modelNote: '当前 API Key 不属于已配置监测号池，全部号池按指定顺序展示。' });
     const ordered = [...status.channels].sort((a, b) => (a.groupLabel === group.pool ? -1 : b.groupLabel === group.pool ? 1 : 0));
     if (entry.statusMode === 'api-key') return { ...status, statusMode: 'api-key', keyGroup: groupName, channels: ordered.filter(channel => channel.groupLabel === group.pool),
       modelNote: '跟随 API Key 号池「' + groupName + '」；gpt-6-astra 与 gpt-5.6-sol 共用该号池状态。' };
-    return { ...status, statusMode: 'all', keyGroup: groupName, channels: ordered, collapsibleChannels: true,
+    return { ...status, statusMode: 'all', keyGroup: groupName, channels: ordered, collapsibleChannels,
       modelNote: '全部号池；当前 API Key 对应「' + groupName + '」已置顶。gpt-6-astra 与 gpt-5.6-sol 共用以下号池状态。' };
   }
 
@@ -406,6 +385,7 @@ class Availability {
       try {
         const credential = requiresAuthorization ? await this.auths.get(scope).read() : null;
         if (requiresAuthorization && !credential) throw Object.assign(new Error('Account authorization required'), { status: 401 });
+        signal.throwIfAborted();
         const endpoint = perModel ? source.endpoint(model) : source.endpoint;
         const requestedAt = this.clock();
         const request = this.request || source.request || requestJson;
@@ -453,7 +433,7 @@ class Availability {
     if (!MODELS.includes(model)) throw problem('不支持的可用性模型。', 400);
     const authorizationVersion = this.authorizationVersion;
     this.retainPackySources(options.allKeys || keys);
-    if (options.automatic || options.followApiKey) keys = keys.map(entry => ['timicc', 'aigo'].includes(adapterFor(entry.baseurl)?.id) ? { ...entry, statusMode: 'api-key' } : entry);
+    if (options.automatic || options.followApiKey) keys = keys.map(entry => ['input', 'timicc', 'aigo'].includes(adapterFor(entry.baseurl)?.id) ? { ...entry, statusMode: 'api-key' } : entry);
     // Status belongs to a provider; balances and subscriptions belong to a key account.
     const monitors = new Map();
     const statusGroup = entry => entry.displayProviderId || providerId(entry.baseurl);
@@ -485,11 +465,11 @@ class Availability {
         this.read(adapter, model, 'status', adapter.accountScopedStatus ? scope : monitors.get(provider) || scope, statusScope),
         Promise.all(['balance', 'subscriptions'].map(resource => !keyBalance && adapter[resource] ? this.read(adapter, model, resource, scope, statusScope) : null)),
         adapter.id === 'timicc' && routeEntry.statusMode === 'api-key' ? this.read(adapter, model, 'keys', scope, statusScope)
-          : adapter.id === 'aigo' ? this.read(adapter, model, 'keys', scope, statusScope) : null,
+          : ['input', 'aigo'].includes(adapter.id) ? this.read(adapter, model, 'keys', scope, statusScope) : null,
       ]);
       let status = entry.value?.[model];
       if (adapter.id === 'timicc' && status) status = await this.selectTimiccPool(status, routeEntry, keyGroups);
-      if (adapter.id === 'aigo' && status) status = await this.selectAigoPools(status, routeEntry, keyGroups);
+      if (['input', 'aigo'].includes(adapter.id) && status) status = await this.selectAccountPools(status, routeEntry, keyGroups, adapter);
       accounts.forEach((account, index) => {
         if (account) row[['balance', 'subscriptions'][index]] = {
           ...account.value, fetchedAt: account.fetchedAt,
@@ -612,4 +592,4 @@ class Availability {
   }
 }
 
-module.exports = { Availability, MODELS, REFRESH_MS, adapterFor, readInputStatus, requestJson, requestText };
+module.exports = { Availability, MODELS, REFRESH_MS, adapterFor, requestJson, requestText };

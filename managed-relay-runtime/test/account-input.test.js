@@ -16,6 +16,8 @@ const { start } = require('../../managed-relay-server');
 const fixture = require('./monitor-login-fixture');
 const LOGIN = loginEndpoints('input');
 const PUBLIC = 'https://status.input.im/api/status';
+const { ENDPOINT } = require('../availability-input');
+const { keyEndpoint } = require('../input-key-groups');
 const keys = [{ name: 'INPUT', baseurl: 'https://ai.input.im', value: 'sk-not-account-auth' },
   { name: 'INPUT backup', baseurl: 'https://ai.input.im/v1', value: 'sk-not-account-auth-2' }];
 const credentials = { site: 'input', username: 'normal', password: fixture.PASSWORD };
@@ -67,18 +69,18 @@ test('empty, unlimited, future and expired subscriptions remain distinct; missin
   }
 });
 
-test('INPUT public availability works without account login and credentials never go to status.input.im', async t => {
+test('INPUT monitor requires account login and makes no unauthenticated requests', async t => {
   const calls = [];
   const monitor = new Availability({}, { request: async (url, options) => {
     calls.push(url); assert.equal(options.token, undefined); return fixture.request(url, options);
   } });
   t.after(() => monitor.close());
   const row = (await monitor.snapshot(keys)).rows[0];
-  assert.equal(row.state, 'available');
+  assert.equal(row.state, 'auth-required');
   assert.equal(row.authorizationSite, 'input');
   assert.equal(row.balance.state, 'auth-required');
   assert.equal(row.subscriptions.state, 'auth-required');
-  assert.deepEqual(calls, [PUBLIC]);
+  assert.deepEqual(calls, []);
 });
 
 test('INPUT password login verifies auth/me, stores auth_token separately and refreshes balance/subscriptions once per 15 seconds', async t => {
@@ -112,9 +114,9 @@ test('INPUT password login verifies auth/me, stores auth_token separately and re
     assert.equal(row.subscriptions.items.length, 2);
     assert.equal(row.state, 'available');
   }
-  assert.deepEqual(calls.sort(), [PUBLIC, BALANCE_ENDPOINT, SUBSCRIPTIONS_ENDPOINT].sort());
-  now += REFRESH_MS - 1; await monitor.snapshot(keys); assert.equal(calls.length, 3);
-  now++; await monitor.snapshot(keys); assert.equal(calls.length, 6);
+  assert.deepEqual(calls.sort(), [ENDPOINT, keyEndpoint(1), BALANCE_ENDPOINT, SUBSCRIPTIONS_ENDPOINT].sort());
+  now += REFRESH_MS - 1; await monitor.snapshot(keys); assert.equal(calls.length, 4);
+  now++; await monitor.snapshot(keys); assert.equal(calls.length, 8);
 });
 
 test('manual INPUT auth validates before save; clearing INPUT and two-factor challenges cannot affect code for me', async t => {
@@ -141,7 +143,7 @@ test('manual INPUT auth validates before save; clearing INPUT and two-factor cha
   assert.throws(() => new MonitorAuth(home, '../other'));
 });
 
-test('subscription failures retain explicitly stale data while balance and public availability keep refreshing', async t => {
+test('subscription failures retain explicitly stale data while balance and monitor keep refreshing', async t => {
   let now = Date.now(), failure = 0;
   const monitor = new Availability({}, { clock: () => now, auths: { input: { read: async () => ({ token: fixture.INPUT_TOKEN }) } }, request: async (url, options) => {
     if (url === SUBSCRIPTIONS_ENDPOINT && failure) throw Object.assign(new Error('private input error'), { status: failure });
@@ -198,7 +200,7 @@ test('local API supports INPUT login and manual authorization without returning 
   assert.ok(!JSON.stringify(snapshot).includes(fixture.INPUT_TOKEN));
   assert.equal((await post('/api/availability/authorization', { site: 'input', token: '' })).status, 200);
   const cleared = (await (await fetch(app.uiUrl + '/api/availability')).json()).rows[0];
-  assert.equal(cleared.state, 'available');
+  assert.equal(cleared.state, 'auth-required');
   assert.deepEqual(cleared.balance, { state: 'auth-required', fetchedAt: null });
   assert.deepEqual(cleared.subscriptions, { state: 'auth-required', fetchedAt: null });
   assert.equal((await post('/api/availability/authorization', { site: 'input', token: fixture.INPUT_TOKEN })).status, 200);

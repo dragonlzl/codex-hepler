@@ -43,6 +43,7 @@ async function request(url, { json, token }) {
   if (url.startsWith('https://aixor.cc/')) return require('./aixor-account-fixture').request(...arguments);
   if (url.startsWith('https://www.krill-code.com/')) return require('./krill-account-fixture').request(...arguments);
   if (url === 'https://status.input.im/api/status') return { services: ['gpt-6-astra', 'gpt-5.6-sol'].map(model => ({ model, history: [{ ts: Date.now() / 1000, ok: true, latency_ms: 800 }] })) };
+  if (url === require('../availability-input').ENDPOINT || require('../input-key-groups').isKeyEndpoint(url)) return require('./input-fixture').request(...arguments);
   if (url === INPUT_LOGIN.login) {
     if (json.password !== PASSWORD) throw Object.assign(new Error('Invalid fixture credentials'), { status: 401 });
     return json.email === 'otp' ? { code: 0, data: { requires_2fa: true, temp_token: 'input-' + TEMP_TOKEN } } : { code: 0, data: { access_token: INPUT_TOKEN, refresh_token: 'input-' + REFRESH_TOKEN } };

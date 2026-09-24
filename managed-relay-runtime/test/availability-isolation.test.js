@@ -23,7 +23,7 @@ test('refresh timeout and monitor shutdown leave an ongoing model stream on the 
   const outbound = new Outbound(home);
   const route = { proxyUrl: 'http://127.0.0.1:' + proxy.address().port };
   await outbound.save({ mode: 'proxy', proxyUrl: route.proxyUrl });
-  const monitor = new Availability(outbound, { timeoutMs: 50, request: (_url, { signal, outbound }) => new Promise((resolve, reject) => {
+  const monitor = new Availability(outbound, { timeoutMs: 50, auths: { input: { read: async () => ({ token: 'fixture' }) } }, request: (_url, { signal, outbound }) => new Promise((resolve, reject) => {
     // Both consumers use the real shared Outbound/ProxyAgent; HTTP keeps this local
     // fixture independent of external DNS, credentials and certificate trust.
     const req = http.get('http://status.invalid/api/status', { signal, agent: outbound.agent(route, signal) }, res => {

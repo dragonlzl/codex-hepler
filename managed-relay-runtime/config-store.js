@@ -81,6 +81,9 @@ function packyBalanceSource(state, name) {
 function timiccStatusMode(state, name) {
   return Object.hasOwn(state.timiccStatusModes || {}, name) && state.timiccStatusModes[name] === 'api-key' ? 'api-key' : 'all';
 }
+function inputStatusMode(state, name) {
+  return Object.hasOwn(state.inputStatusModes || {}, name) && state.inputStatusModes[name] === 'api-key' ? 'api-key' : 'all';
+}
 function aigoStatusMode(state, name) {
   return Object.hasOwn(state.aigoStatusModes || {}, name) && state.aigoStatusModes[name] === 'api-key' ? 'api-key' : 'all';
 }
@@ -166,6 +169,7 @@ class ConfigStore {
       packyBalanceSourceAvailable: true,
       timiccStatusModeAvailable: true,
       aigoStatusModeAvailable: true,
+      inputStatusModeAvailable: true,
       autoSwitchSettings: current.state.autoSwitch || autoDefaults(),
       autoSwitchRevision: autoRevision(current, config),
       autoSwitchGuard: autoGuard(current, config),
@@ -173,6 +177,7 @@ class ConfigStore {
         ...(merchantId(entry.baseurl) === 'packycode' ? { balanceSource: packyBalanceSource(current.state, entry.name) } : {}),
         ...(merchantId(entry.baseurl) === 'timicc' ? { statusMode: timiccStatusMode(current.state, entry.name) } : {}),
         ...(merchantId(entry.baseurl) === 'aigo' ? { statusMode: aigoStatusMode(current.state, entry.name) } : {}),
+        ...(merchantId(entry.baseurl) === 'input' ? { statusMode: inputStatusMode(current.state, entry.name) } : {}),
         maskedValue: mask(entry.value), revision: entryRevision(entry), active: entry.name === active?.name, pinned: pinned.has(entry.name) })),
     };
   }
@@ -383,6 +388,11 @@ class ConfigStore {
         delete state.aigoStatusModes[originalName];
         if (merchantId(entry.baseurl) === 'aigo') state.aigoStatusModes = { ...state.aigoStatusModes, [entry.name]: aigoStatusMode(current.state, originalName) };
       }
+      if (Object.hasOwn(state.inputStatusModes || {}, originalName)) {
+        state.inputStatusModes = { ...state.inputStatusModes };
+        delete state.inputStatusModes[originalName];
+        if (merchantId(entry.baseurl) === 'input') state.inputStatusModes = { ...state.inputStatusModes, [entry.name]: inputStatusMode(current.state, originalName) };
+      }
       if (current.state.accountBindings) state.accountBindings = updateBindingsForEdit(bindings, original, entry, config.keys);
       if (entry.name !== originalName) {
         if (state.activeName === originalName) state.activeName = entry.name;
@@ -425,6 +435,19 @@ class ConfigStore {
       if (payload.revision !== entryRevision(entry) || payload.previousMode !== aigoStatusMode(current.state, entry.name)) throw problem('子项配置已变化，请刷新后重试。', 409);
       await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state,
         aigoStatusModes: { ...current.state.aigoStatusModes, [entry.name]: payload.mode } }) }]);
+      return { message: '已保存该子项的号池展示方式。' };
+    });
+  }
+
+  setInputStatusMode(payload) {
+    return this.serialize(async () => {
+      if (!['all', 'api-key'].includes(payload?.mode)) throw problem('请选择全部号池或跟随 API Key。', 400);
+      const { config } = await this.keys(), current = await this.read();
+      const entry = config.keys.find(entry => entry.name === payload.name);
+      if (!entry || merchantId(entry.baseurl) !== 'input') throw problem('请选择INPUT子项。', 400);
+      if (payload.revision !== entryRevision(entry) || payload.previousMode !== inputStatusMode(current.state, entry.name)) throw problem('子项配置已变化，请刷新后重试。', 409);
+      await this.commit([{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state,
+        inputStatusModes: { ...current.state.inputStatusModes, [entry.name]: payload.mode } }) }]);
       return { message: '已保存该子项的号池展示方式。' };
     });
   }

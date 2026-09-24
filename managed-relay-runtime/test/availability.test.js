@@ -6,7 +6,7 @@ const path = require('node:path');
 const https = require('node:https');
 const { PassThrough } = require('node:stream');
 const { EventEmitter } = require('node:events');
-const { Availability, MODELS, REFRESH_MS, adapterFor, readInputStatus, requestJson } = require('../availability');
+const { Availability, MODELS, REFRESH_MS, adapterFor, requestJson } = require('../availability');
 const { start } = require('../../managed-relay-server');
 
 const NOW = 1789551000000;
@@ -15,11 +15,14 @@ const keys = [
   { name: 'INPUT backup', baseurl: 'https://ai.input.im/v1', value: 'sk-private-backup' },
   { name: 'Other', baseurl: 'https://other.example/v1', value: 'sk-other' },
 ];
-function payload(now = NOW) {
-  return { services: MODELS.map((model, index) => {
-    const history = Array.from({ length: 60 }, (_, i) => ({ ts: now / 1000 - (59 - i) * 60, ok: index === 0 || i % 2 === 0, latency_ms: 123, error: null }));
-    return { model, history, last: history.at(-1) };
-  }) };
+const input = require('../availability-input');
+const fixture = require('./input-fixture');
+const payload = (now = NOW) => fixture.status(now);
+function engine(options = {}) {
+  const monitor = new Availability({}, { ...options, auths: { input: { read: async () => ({ token: fixture.TOKEN }) } } });
+  const read = monitor.read.bind(monitor);
+  monitor.read = (adapter, model, resource = 'status', ...rest) => resource === 'status' ? read(adapter, model, resource, ...rest) : null;
+  return monitor;
 }
 
 test('adapter matches exact registered hosts independent of route name and path', () => {
@@ -30,32 +33,15 @@ test('adapter matches exact registered hosts independent of route name and path'
   }
 });
 
-test('normalizes model IDs, chronological samples and the most recent 60 only', () => {
-  const data = payload();
-  data.services[0].history.reverse();
-  data.services[0].history.push({ ts: NOW / 1000 - 6000, ok: false });
-  data.services.push({ model: 'gpt-6-astra-alias', history: 'not relevant' });
-  const models = readInputStatus(data);
-  assert.deepEqual(Object.keys(models), MODELS);
-  assert.equal(models['gpt-6-astra'].history.length, 60);
-  assert.equal(models['gpt-6-astra'].uptimePct, 100);
-  assert.equal(models['gpt-5.6-sol'].uptimePct, 50);
-  assert.equal(models['gpt-6-astra'].last.at, NOW);
-  assert.equal(models['gpt-6-astra'].last.latencyMs, 123);
-  assert.ok(models['gpt-6-astra'].history[0].at < models['gpt-6-astra'].history.at(-1).at);
-  assert.throws(() => readInputStatus({ services: [{ model: MODELS[0], history: [{ ts: 123, ok: 'false' }] }] }));
-  assert.throws(() => readInputStatus({}));
-});
-
 test('deduplicates concurrent requests, duplicate relay accounts and both model selections for 15 seconds', async () => {
   let now = NOW;
   let calls = 0;
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  const monitor = new Availability({}, { clock: () => now, request: async (url, options) => {
+  const monitor = engine({ clock: () => now, request: async (url, options) => {
     calls++;
-    assert.equal(url, 'https://status.input.im/api/status');
-    assert.deepEqual(Object.keys(options).sort(), ['outbound', 'signal']);
+    assert.equal(url, input.ENDPOINT);
+    assert.equal(options.token, fixture.TOKEN); assert.equal(options.site, 'input');
     await gate;
     return payload(now);
   } });
@@ -66,8 +52,8 @@ test('deduplicates concurrent requests, duplicate relay accounts and both model 
   assert.equal(calls, 1);
   assert.equal(astra.model, 'gpt-6-astra');
   assert.equal(astra.rows[0].state, 'available');
-  assert.equal(sol.rows[0].state, 'unavailable');
-  assert.deepEqual(astra.rows[0].history, astra.rows[1].history);
+  assert.equal(sol.rows[0].state, 'available');
+  assert.deepEqual(astra.rows[0].channels, astra.rows[1].channels);
   assert.equal(astra.rows[2].state, 'unsupported');
   assert.ok(!JSON.stringify(astra).includes('sk-private'));
   now += REFRESH_MS - 1;
@@ -79,23 +65,22 @@ test('deduplicates concurrent requests, duplicate relay accounts and both model 
   monitor.close();
 });
 
-test('missing models stay unknown and do not borrow another model history', async () => {
-  const data = payload();
-  data.services = data.services.slice(1);
-  const monitor = new Availability({}, { clock: () => NOW, request: async () => data });
+test('missing pools stay unknown and do not borrow another pool history', async () => {
+  const data = payload(); data.data.items.shift();
+  const monitor = engine({ clock: () => NOW, request: async () => data });
   const row = (await monitor.snapshot(keys)).rows[0];
   assert.equal(row.state, 'no-data');
-  assert.deepEqual(row.history, []);
-  assert.equal(row.uptimePct, null);
-  assert.equal((await monitor.snapshot(keys, MODELS[1])).rows[0].history.length, 60);
-  await assert.rejects(monitor.snapshot(keys, 'gpt-6-astra-alias'), error => error.status === 400);
-  monitor.close();
+  assert.deepEqual(row.channels[0].history, []);
+  assert.equal(row.channels[0].uptimePct, null);
+  assert.equal(row.channels[1].history.length, 60);
+  await assert.rejects(monitor.snapshot(keys, 'unknown-model'), error => error.status === 400);
+  await monitor.close();
 });
 
 test('failures retain historical samples but mark them stale, then recover', async () => {
   let now = NOW;
   let fail = false;
-  const monitor = new Availability({}, { clock: () => now, request: async () => {
+  const monitor = engine({ clock: () => now, request: async () => {
     if (fail) throw new Error('token=should-not-leak');
     return payload(now);
   } });
@@ -105,7 +90,7 @@ test('failures retain historical samples but mark them stale, then recover', asy
   const stale = (await monitor.snapshot(keys)).rows[0];
   assert.equal(stale.state, 'stale');
   assert.equal(stale.fetchedAt, NOW);
-  assert.equal(stale.history.length, 60);
+  assert.equal(stale.channels[0].history.length, 60);
   assert.ok(!JSON.stringify(stale).includes('should-not-leak'));
   fail = false;
   now += REFRESH_MS;
@@ -114,7 +99,7 @@ test('failures retain historical samples but mark them stale, then recover', asy
 });
 
 test('cold failures and malformed responses do not become red model samples', async () => {
-  const monitor = new Availability({}, { request: async () => ({ services: 'invalid' }) });
+  const monitor = engine({ request: async () => ({ code: 0, data: { items: 'invalid' } }) });
   const row = (await monitor.snapshot(keys)).rows[0];
   assert.equal(row.state, 'error');
   assert.deepEqual(row.history, []);
@@ -126,7 +111,7 @@ test('cold failures and malformed responses do not become red model samples', as
 test('refresh failures expose classified causes, record safe diagnostics and clear them on recovery', async () => {
   let now = NOW, failure = Object.assign(new Error('private-key'), { code: 'ECONNRESET' });
   const events = [];
-  const monitor = new Availability({}, { clock: () => now, record: event => events.push(event), request: async () => {
+  const monitor = engine({ clock: () => now, record: event => events.push(event), request: async () => {
     if (failure) throw failure;
     return payload(now);
   } });
@@ -155,7 +140,7 @@ test('refresh failures expose classified causes, record safe diagnostics and cle
 test('synchronous transport errors can be retried after the cache expires', async () => {
   let now = NOW;
   let calls = 0;
-  const monitor = new Availability({}, { clock: () => now, request: () => {
+  const monitor = engine({ clock: () => now, request: () => {
     if (++calls === 1) throw new Error('Synchronous failure');
     return payload(now);
   } });
@@ -167,7 +152,7 @@ test('synchronous transport errors can be retried after the cache expires', asyn
 });
 
 test('an old successful source sample is stale even when fetching succeeds', async () => {
-  const monitor = new Availability({}, { clock: () => NOW + 181000, request: async () => payload() });
+  const monitor = engine({ clock: () => NOW + 181000, request: async () => payload() });
   assert.equal((await monitor.snapshot(keys)).rows[0].state, 'stale');
   monitor.close();
 });
@@ -177,19 +162,20 @@ test('request timeout and service shutdown abort pending network work', async ()
   const request = async (_url, { signal }) => new Promise((resolve, reject) => {
     signal.addEventListener('abort', () => { aborted++; reject(signal.reason); }, { once: true });
   });
-  const timed = new Availability({}, { request, timeoutMs: 20 });
+  const timed = engine({ request, timeoutMs: 20 });
   assert.equal((await timed.snapshot(keys)).rows[0].state, 'error');
   assert.equal(aborted, 1);
   timed.close();
-  const closing = new Availability({}, { request });
+  const closing = engine({ request });
   const pending = closing.snapshot(keys);
+  await new Promise(setImmediate);
   closing.close();
   assert.equal((await pending).rows[0].state, 'error');
   assert.equal(aborted, 2);
 });
 
 test('unsupported sites never cause an outbound status request', async () => {
-  const monitor = new Availability({}, { request: async () => { assert.fail('Unexpected network request'); } });
+  const monitor = engine({ request: async () => { assert.fail('Unexpected network request'); } });
   assert.equal((await monitor.snapshot([keys[2]])).rows[0].state, 'unsupported');
   monitor.close();
 });
@@ -213,7 +199,7 @@ test('HTTP reader sends no auth, refuses redirects and bounds malformed or overs
     return request;
   });
   const options = { outbound: { resolve: async () => ({}), agent: () => false }, signal: new AbortController().signal };
-  assert.equal((await requestJson('https://status.input.im/api/status', options)).services.length, 2);
+  assert.equal((await requestJson('https://status.input.im/api/status', options)).data.items.length, 3);
   statusCode = 302;
   await assert.rejects(requestJson('https://status.input.im/api/status', options), /HTTP/);
   assert.equal(calls, 2);
@@ -242,14 +228,17 @@ test('HTTP API validates models, returns no credentials and leaves Codex config 
     'key_config.json': JSON.stringify({ keys }),
   };
   for (const [file, contents] of Object.entries(files)) await fs.writeFile(path.join(home, file), contents);
-  const app = await start({ home, proxyPort: 0, uiPort: 0, availabilityOptions: { clock: () => NOW, request: async () => payload() }, log: () => {} });
+  const { MonitorAuth } = require('../monitor-auth');
+  const { accountId } = require('../relay-identity');
+  for (const key of keys.slice(0, 2)) await new MonitorAuth(home, 'input', accountId(key)).save(fixture.TOKEN);
+  const app = await start({ home, proxyPort: 0, uiPort: 0, availabilityOptions: { clock: () => NOW, request: async (url, options) => url === input.ENDPOINT ? payload() : fixture.request(url, options) }, log: () => {} });
   t.after(() => app.close());
   const status = await (await fetch(app.uiUrl + '/api/status')).json();
   assert.equal(status.availabilityAvailable, true);
   const astra = await (await fetch(app.uiUrl + '/api/availability')).json();
   assert.equal(astra.rows[0].state, 'available');
   const sol = await (await fetch(app.uiUrl + '/api/availability?model=gpt-5.6-sol')).json();
-  assert.equal(sol.rows[0].state, 'unavailable');
+  assert.equal(sol.rows[0].state, 'available');
   assert.equal((await fetch(app.uiUrl + '/api/availability?model=unknown')).status, 400);
   assert.ok(!JSON.stringify(astra).includes('sk-private'));
   for (const [file, contents] of Object.entries(files)) assert.equal(await fs.readFile(path.join(home, file), 'utf8'), contents);
