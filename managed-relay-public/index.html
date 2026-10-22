@@ -26,7 +26,8 @@
           <section id="notice" class="notice" role="status" aria-live="polite" hidden></section>
           <section id="page-routes" class="page" aria-labelledby="routes-title">
             <div class="page-heading"><div><p class="kicker">YOUR RELAY WORKSPACE</p><h1 id="routes-title">中转站</h1><p>管理线路、查看状态，找到合适的请求入口。</p></div><button id="add-open" class="primary" type="button"><span aria-hidden="true">＋</span> 新增中转</button></div>
-            <section id="current-route" class="current-route" aria-label="当前使用"><span class="current-dot" aria-hidden="true"></span><span class="current-route-label">当前使用</span><button id="current-route-name" type="button" disabled>正在读取…</button><span id="current-route-mode" class="mode-tag"></span><a href="#connection" class="text-link">连接设置 ↗</a></section>
+            <section id="current-route" class="current-route" aria-label="当前使用"><span class="current-dot" aria-hidden="true"></span><span class="current-route-label">当前使用</span><button id="current-route-name" type="button" disabled>正在读取…</button><span id="current-route-mode" class="mode-tag"></span><a href="#connection" class="text-link">账号与连接 ↗</a></section>
+            <p id="current-network" class="current-network" role="status" aria-live="polite" hidden></p>
             <div class="route-controls">
             <section class="auto-panel" aria-labelledby="auto-title">
               <div class="auto-heading"><div><h2 id="auto-title">自动切换</h2><p>中转商优先 · 先绿色，再优先级 · 确认不可用立即换站，查询异常保留当前</p></div><label class="auto-toggle"><input id="auto-enabled" type="checkbox" role="switch" disabled /><span>开启自动切换</span></label></div>
@@ -36,11 +37,12 @@
               <p id="auto-feedback" class="auto-help" role="status" aria-live="polite"></p>
             </section>
             <section class="launch-panel" aria-labelledby="launch-title">
-              <div class="launch-heading"><div><h2 id="launch-title">启动 Codex</h2><p>接入本地代理后，从这里打开 App 或 CLI，后续换站无需重启。</p></div><button id="launch-app" class="secondary" type="button" data-launch="app" disabled>启动 Codex App</button></div>
+              <div class="launch-heading"><div><h2 id="launch-title">启动 Codex</h2><p id="launch-description">官方账号或已接入本地代理时，可从这里打开 App 或 CLI。</p></div><button id="launch-app" class="secondary" type="button" data-launch="app" disabled>启动 Codex App</button></div>
               <form id="launch-cli-form" class="path-form"><label>CLI 工作目录<input id="cli-cwd" type="text" autocomplete="off" spellcheck="false" placeholder="填写要使用的项目目录" aria-describedby="cli-cwd-help" required /></label><button id="launch-cli" class="secondary" type="submit" data-launch="cli" disabled>启动 Codex CLI</button></form>
               <p id="cli-cwd-help">填写后自动保存到当前浏览器，刷新后保留。</p>
               <p class="launch-help">CLI 自动打开独立终端；macOS 优先使用 iTerm，未安装时使用 Terminal。App 已运行时会提示先退出。</p>
               <p id="launch-status" role="status" aria-live="polite">正在检查启动条件…</p>
+              <p id="launch-network-status" role="status" aria-live="polite" hidden></p>
               <p id="launch-feedback" role="status" aria-live="polite"></p>
             </section>
             </div>
@@ -92,9 +94,28 @@
             </section>
           </section>
           <section id="page-connection" class="page" aria-labelledby="connection-title" hidden>
-            <div class="page-heading"><div><p class="kicker">RUNTIME & NETWORK</p><h1 id="connection-title">运行与连接</h1><p>配置请求路由和上游网络，查看最近的连接状态。</p></div></div>
+            <div class="page-heading"><div><p class="kicker">RUNTIME & NETWORK</p><h1 id="connection-title">运行与连接</h1><p>切换官方账号与第三方中转，配置请求路由和上游网络。</p></div></div>
+            <section class="account-mode-panel" aria-labelledby="account-mode-title">
+              <div class="account-mode-heading"><div><p class="kicker">ACCOUNT MODE</p><h3 id="account-mode-title">选择账号方式</h3><p>切换前请结束当前工作并完全退出 Codex App 和 CLI。切换后重新启动，让新的账号方式生效。</p></div><span id="account-mode-current" class="account-mode-badge">正在读取…</span></div>
+              <div class="account-mode-actions" role="group" aria-label="Codex 账号方式">
+                <button type="button" class="account-mode-button" data-account-mode="official" aria-pressed="false" disabled><strong>官方 ChatGPT</strong><small>使用自己的 ChatGPT 账号</small></button>
+                <button type="button" class="account-mode-button" data-account-mode="relay" aria-pressed="false" disabled><strong>第三方中转</strong><small>恢复第三方地址与 API Key</small></button>
+              </div>
+              <p id="account-mode-status" role="status" aria-live="polite">正在读取账号方式。</p>
+              <p class="account-mode-help">首次选择官方后，在重新打开的 Codex 中使用「Sign in with ChatGPT」完成浏览器登录。之后切回第三方再切回官方，工具会保存并恢复登录状态；登录过期时需重新登录。</p>
+              <p id="account-mode-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
+            </section>
+            <section id="official-network-panel" class="account-mode-panel" aria-labelledby="official-network-title" hidden>
+              <div class="account-mode-heading"><div><p class="kicker">OFFICIAL CONNECTION</p><h3 id="official-network-title">官方连接方式</h3><p>按当前网络选择；设置会保存，完全退出并重新启动 Codex App 或 CLI 后生效。</p></div></div>
+              <div class="account-mode-actions" role="group" aria-label="官方 ChatGPT 连接方式">
+                <button type="button" class="account-mode-button" data-official-network="auto" aria-pressed="false" disabled><strong>自动识别</strong><small>使用 Flyingbird 等设备代理</small></button>
+                <button type="button" class="account-mode-button" data-official-network="wifi" aria-pressed="false" disabled><strong>使用 Wi-Fi</strong><small>网络本身可访问，不额外使用设备代理</small></button>
+              </div>
+              <p id="official-network-status" role="status" aria-live="polite">正在读取连接方式。</p>
+              <p id="official-network-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
+            </section>
             <section class="connection-overview"><p id="provider-identity">Codex provider：—</p><div class="proxy-address"><span>本地代理地址</span><code id="proxy-url">—</code></div></section>
-        <section class="mode-panel"><div class="mode-copy"><p class="kicker">ROUTING MODE</p><h3>选择运行方式</h3><p id="mode-description">—</p></div><div class="mode-actions"><button class="mode-button" data-mode="direct"><strong>直接配置</strong><small>切换后需重启 Codex</small></button><button class="mode-button" data-mode="proxy"><strong>本地代理</strong><small>切换后无需重启 Codex</small></button></div></section>
+        <section class="mode-panel"><div class="mode-copy"><p class="kicker">RELAY ROUTING</p><h3>第三方中转运行方式</h3><p id="mode-description">—</p></div><div class="mode-actions"><button class="mode-button" data-mode="direct"><strong>直接配置</strong><small>切换后需重启 Codex</small></button><button class="mode-button" data-mode="proxy"><strong>本地代理</strong><small>切换后无需重启 Codex</small></button></div></section>
         <section id="install-panel" class="install-panel">
           <div><p class="kicker">CODEX CONNECTION</p><h3>接入 Codex 本地代理</h3><p>选择本地代理并接入后，换站无需重启。首次接入或恢复直连后，需重启一次 Codex。</p></div>
           <div class="connection-actions"><button id="install-button" class="secondary" type="button" aria-describedby="install-feedback">接入本地代理</button><button id="restore-button" class="secondary" type="button">恢复接入前的直连配置</button></div>
@@ -102,7 +123,7 @@
         </section>
         <section class="request-status"><p id="last-request" role="status">尚未读取请求状态。</p><button id="refresh-status" type="button" title="刷新状态" aria-label="刷新状态">↻</button></section>
         <section class="network-panel" aria-labelledby="network-title">
-          <h3 id="network-title">上游网络</h3>
+          <h3 id="network-title">第三方中转上游网络</h3>
           <p id="network-status" role="status">正在读取出站设置。</p>
           <form id="network-form">
             <label>出站方式<select id="network-mode" name="mode"><option value="auto">自动跟随系统代理</option><option value="direct">直连</option><option value="proxy">指定代理</option></select></label>

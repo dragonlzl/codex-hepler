@@ -5,7 +5,7 @@
 | 脚本 | 作用 | 什么时候运行 |
 | --- | --- | --- |
 | `start-managed-relay.sh`（macOS）<br>`start-managed-relay.cmd`（Windows） | 启动管理页面和本地转发服务 | 每次使用中转工具前先运行，终端保持打开 |
-| `start-codex-local.sh`（macOS）<br>`start-codex-local.cmd`（Windows） | 启动带本机代理绕过规则的 Codex | Codex 已接入本地代理后，首次接入或重新启动 Codex 时运行 |
+| `start-codex-local.sh`（macOS）<br>`start-codex-local.cmd`（Windows） | 启动官方账号或带本机代理绕过规则的 Codex | 官方模式可直接运行（macOS 会传递当前系统 HTTP/HTTPS 代理）；第三方已接入本地代理后，首次接入或重新启动时运行 |
 | `start-codex-cli.sh`（macOS）<br>`start-codex-cli.cmd`（Windows） | 在当前终端启动 Codex CLI | 进入目标项目目录后运行，支持 `--check` |
 
 各入口依赖不同：管理服务首次运行会自动安装 npm 依赖；Codex 启动入口只用 Node 内置模块，不需要任何 npm 包。都要求 Node.js 22.13 或更高版本。详见 [CODEX-LOCAL-NETWORK.md](CODEX-LOCAL-NETWORK.md)。下文示例命令若写作 `.sh`，Windows 上请换用同名 `.cmd`。
@@ -16,7 +16,7 @@
 
 ## 页面操作顺序
 
-页面顶部按操作顺序排列：
+「运行与连接」页面先选择账号方式：官方 ChatGPT 或第三方中转。第三方模式的路由操作顺序：
 
 1. 点击“直接配置”或“本地代理”。
 2. 使用“本地代理”时，点击紧邻的“接入本地代理”；使用“直接配置”时，点击“恢复接入前的直连配置”。
@@ -29,14 +29,28 @@
 
 ## 从页面启动 App 或 CLI
 
-完成本地代理接入后，回到「中转站」页面：
+选择官方 ChatGPT 或完成第三方本地代理接入后，回到「中转站」页面：
 
-- 点击「启动 Codex App」：已运行时提示先完全退出，未运行时带本机绕过规则启动。
+- 点击「启动 Codex App」：已运行时提示先完全退出；官方模式正常启动，macOS 会把当前系统 HTTP/HTTPS 代理传给新 App 进程，第三方代理模式带本机绕过规则启动。
 - 填写「CLI 工作目录」，点击「启动 Codex CLI」：macOS 优先自动打开 iTerm，未安装或调用失败时使用 Terminal；Windows 优先打开 Windows Terminal，不可用时打开 PowerShell。无需手动打开终端。
 - 启动请求发出后，页面继续检查 CLI 会话状态。CLI 在新终端中交互，页面继续用于换站。
 - 本次管理服务通过页面启动的 CLI 未退出时，按钮会防止重复开窗；独立脚本或其它终端启动的 CLI 不受此检测约束。管理服务重启后不接管旧终端。
 
 CLI 尚未安装或不在管理服务的 PATH 中时，先安装 CLI，或设置 `CODEX_CLI_PATH` / JSON 配置中的 `codexCliPath` 为可执行文件完整路径。Windows 支持 `codex.exe` 和 npm 安装的 `codex.cmd`。环境变量改变后需重启管理服务。CLI 工作目录与 Codex 配置目录是两个独立设置。
+
+## 切换官方 ChatGPT 与第三方中转
+
+首次更新工具后，先重启管理服务，再刷新页面。账号方式入口位于「运行与连接」，「中转站」页面的当前使用栏也有「账号与连接」链接。
+
+1. 结束 Codex 当前任务，并完全退出 App 和 CLI（macOS App 用 Cmd+Q）。
+2. 在「运行与连接」选择「官方 ChatGPT」。工具先备份并保存当前第三方配置和认证，再恢复官方环境，保留 MCP、技能等无关设置。
+3. 从页面或启动脚本重新打开 Codex，点击「Sign in with ChatGPT」并完成浏览器登录。CLI 也可使用 `codex login`。首次登录需要自己完成，工具没有自己的 OAuth 登录页。
+4. 需要中转时，先退出 Codex，在页面选择「第三方中转」并重启 Codex。工具会保存当前官方登录状态，恢复中转配置及 API Key。
+5. 以后在两个账号方式之间切换都需重启 Codex；切回官方时会恢复保存的登录状态，过期时重新登录即可。
+
+官方模式下的当前使用栏会显示「官方 ChatGPT」和登录状态。「官方连接方式」中可选「自动识别」或「使用 Wi-Fi」：自动识别会使用 Flyingbird 等设备代理，使用 Wi-Fi 会清除旧代理并跳过设备代理。选择后完全退出并重新启动 Codex；页面会同时显示当前 App 使用的连接和下次启动方式。检测到登录凭据表示本机已有登录状态，令牌是否仍有效以 Codex 的实际登录结果为准。第三方列表仍可编辑和监测，但不能直接套用中转配置；切回第三方后再点击线路「切换」。
+
+当前只保存一套官方账号状态。在同一配置目录内重新登录另一个 ChatGPT 账号后，下次切走会保存最新账号。系统钥匙串、临时凭据或损坏的账号状态不能按文件方式安全切换时，页面会显示原因。
 
 ## 编辑已保存的中转
 
@@ -109,7 +123,7 @@ CLI 尚未安装或不在管理服务的 PATH 中时，先安装 CLI，或设置
 
 1. 在管理页面顶部点击“直接配置”；如果当前已经接入本地代理，则点击紧邻的“恢复接入前的直连配置”。
 2. 完全退出当前 Codex，再重新启动。
-3. 直连模式下使用普通方式双击 Codex App。`start-codex-local.sh` 专门用于本地代理模式，检测到直连配置时会拒绝启动。
+3. 第三方直连模式下使用普通方式双击 Codex App。`start-codex-local.sh` 支持官方 ChatGPT 和第三方本地代理，检测到第三方直连配置时会拒绝启动。
 
 直连模式会恢复为以前的行为：切换中转站会修改 Codex 配置，之后需要重启 Codex 才能加载新的中转站。这个过程不会修改 FlyingBird。
 
@@ -131,6 +145,7 @@ CLI 尚未安装或不在管理服务的 PATH 中时，先安装 CLI，或设置
 ## 常见状态
 
 - 页面显示“服务已启动”：管理服务正常运行。
+- 当前使用显示“官方 ChatGPT · 待登录自己的 ChatGPT 账号”：重启 Codex 并完成官方浏览器登录；中转列表还在，切回第三方可继续使用。
 - 页面显示“Codex 配置已指向代理”：配置已经写入，但 Codex 可能还没有重启加载。
 - 上游检查 HTTP 200，但 Codex 无法对话：先确认 Codex 是通过 `start-codex-local.sh` 启动的，再查看页面最近请求和 `relay-ui-runtime/requests.jsonl`。
 - 页面显示 `ECONNREFUSED`：指定的代理端口当前没有监听，确认 FlyingBird 智能连接已开启，或改回自动模式。

@@ -9,9 +9,10 @@ const { Diagnostics } = require('./managed-relay-runtime/diagnostics');
 const { Availability } = require('./managed-relay-runtime/availability');
 const { AutoSwitch } = require('./managed-relay-runtime/auto-switch');
 const { networkAccessError } = require('./managed-relay-runtime/network-error');
-const { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
+const { settingsPath, readSettings, writeSettings, readOfficialNetworkMode, writeOfficialNetworkMode, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
 const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
 const { createLauncher } = require('./managed-relay-runtime/codex-launcher');
+const { officialNetworkStatus } = require('./managed-relay-runtime/codex-launch');
 const { IntelligenceTests, routeId: intelligenceRouteId } = require('./managed-relay-runtime/intelligence-tests');
 const { loadBaseline } = require('./managed-relay-runtime/intelligence-review');
 
@@ -67,6 +68,8 @@ async function start(options = {}) {
   let appPathSource = paths.appSource;
   const appPathLocked = paths.appSource === 'env';
   const launcher = options.launcher || createLauncher();
+  let officialNetworkMode = options.officialNetworkMode || await readOfficialNetworkMode();
+  const readOfficialNetwork = options.officialNetworkStatus || (mode => officialNetworkStatus(mode));
   let launchInFlight = false;
 
   const build = (target, injected) => {
@@ -115,13 +118,21 @@ async function start(options = {}) {
     const intelligence = holder.intelligence;
     const current = await store.status();
     const entry = current.keys.find(item => item.name === current.selectedProxyName);
-    return { ...current, home: homeSource === 'default' ? displayPath(holder.home) : path.resolve(holder.home),
+    const launch = await launcher.snapshot();
+    const displayHome = homeSource === 'default' ? displayPath(holder.home) : path.resolve(holder.home);
+    if (launch.appNetwork) launch.appNetwork = path.resolve(launch.appNetwork.home) === path.resolve(holder.home)
+      ? { ...launch.appNetwork, home: displayHome } : null;
+    const officialNetwork = current.accountSwitch?.mode === 'official'
+      ? await readOfficialNetwork(officialNetworkMode)
+      : { mode: officialNetworkMode, source: 'inactive', proxyUrl: '', label: '官方模式未启用' };
+    return { ...current, home: displayHome,
       homeSource, homeLocked, settingsPath: displayPath(settingsFile),
       configPath: displayPath(paths.configFile), codexAppPath: appPath || null, appPathSource, appPathLocked,
-      launch: await launcher.snapshot(),
+      launch,
       autoSwitch: autoSwitch.snapshot(),
       intelligence: await intelligence.snapshot(current.keys),
-      lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, accountGroupingAvailable: true, network: await outbound.status(entry?.baseurl) };
+      lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, accountGroupingAvailable: true,
+      officialNetwork, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
   let savingPaths = false;
@@ -196,7 +207,7 @@ async function start(options = {}) {
           launchInFlight = true;
           let result;
           try {
-            const current = { ...await store.status(), home: path.resolve(holder.home) };
+            const current = { ...await store.status(), home: path.resolve(holder.home), officialNetwork: { mode: officialNetworkMode } };
             const env = { ...process.env, CODEX_HOME: current.home, RELAY_UI_PORT: String(ui.address().port) };
             // Use the page's current path even if the JSON was changed externally.
             if (appPath) env.CODEX_APP_PATH = appPath; else delete env.CODEX_APP_PATH;
@@ -207,8 +218,8 @@ async function start(options = {}) {
           json(res, 200, { ...result, status: await status() });
           return;
         }
-        if (launchInFlight && ['/api/home', '/api/app-path', '/api/proxy/install', '/api/proxy/restore', '/api/select'].includes(url.pathname)) {
-          throw problem('正在启动 Codex，请稍后再修改连接配置。', 409);
+        if ((launchInFlight || savingPaths) && ['/api/home', '/api/app-path', '/api/proxy/install', '/api/proxy/restore', '/api/select', '/api/account-mode', '/api/official-network'].includes(url.pathname)) {
+          throw problem(savingPaths ? '目录或应用路径正在保存，请稍后重试。' : '正在启动 Codex，请稍后再修改连接配置。', 409);
         }
         if (url.pathname.startsWith('/api/availability/browser-login/')) {
           const action = url.pathname.slice('/api/availability/browser-login/'.length);
@@ -221,11 +232,26 @@ async function start(options = {}) {
           json(res, 200, result); return;
         }
         let result;
-        const autoMutation = ['/api/select', '/api/proxy/install', '/api/proxy/restore', '/api/keys/edit', '/api/accounts/bind', '/api/accounts/unbind',
+        const autoMutation = ['/api/account-mode', '/api/select', '/api/proxy/install', '/api/proxy/restore', '/api/keys/edit', '/api/accounts/bind', '/api/accounts/unbind',
           '/api/network', '/api/availability/authorization', '/api/availability/login', '/api/packycode/balance/source',
           '/api/auto-switch/settings', '/api/auto-switch/toggle'].includes(url.pathname);
         if (autoMutation) autoSwitch.invalidate();
-        if (url.pathname === '/api/auto-switch/settings') result = await store.saveAutoSwitch(payload);
+        if (url.pathname === '/api/account-mode') {
+          if (req.headers.origin !== uiUrl) throw problem('账号模式切换必须来自本地管理页面。', 403);
+          if (!payload || !['official', 'relay'].includes(payload.mode) || Object.keys(payload).some(key => key !== 'mode')) throw problem('账号模式无效。', 400);
+          const launch = await launcher.snapshot();
+          if (['pending', 'running'].includes(launch.cli?.state)) throw problem('请先退出本工具启动的 Codex CLI，再切换账号模式。', 409);
+          result = await store.switchAccountMode(payload.mode);
+        }
+        else if (url.pathname === '/api/official-network') {
+          if (req.headers.origin !== uiUrl) throw problem('官方连接设置必须来自本地管理页面。', 403);
+          if (!payload || !['auto', 'wifi'].includes(payload.mode) || Object.keys(payload).some(key => key !== 'mode')) throw problem('官方连接方式无效。', 400);
+          savingPaths = true;
+          try { officialNetworkMode = await writeOfficialNetworkMode(payload.mode); }
+          finally { savingPaths = false; }
+          result = { message: payload.mode === 'auto' ? '已保存：自动识别设备代理。完全退出并重新启动 Codex 后生效。' : '已保存：使用 Wi-Fi。完全退出并重新启动 Codex 后生效。', restartRequired: true };
+        }
+        else if (url.pathname === '/api/auto-switch/settings') result = await store.saveAutoSwitch(payload);
         else if (url.pathname === '/api/auto-switch/toggle') result = await store.toggleAutoSwitch(payload.enabled, payload.revision);
         else if (url.pathname === '/api/select') result = await store.select(payload.name, payload.mode);
         else if (url.pathname === '/api/proxy/install') result = await store.install(payload.name);

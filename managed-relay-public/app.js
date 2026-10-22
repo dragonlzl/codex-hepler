@@ -3,6 +3,8 @@ let viewMode = null;
 let busy = false;
 let loaded = false;
 let feedback = { phase: 'idle', message: '' };
+let accountFeedback = { phase: 'idle', message: '' };
+let officialNetworkFeedback = { phase: 'idle', message: '' };
 const list = document.querySelector('#route-list');
 const simpleList = document.querySelector('#simple-route-list');
 const routesPanel = document.querySelector('#routes-panel');
@@ -200,10 +202,68 @@ function renderAppPath() {
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 
+function officialMode() { return state.accountSwitch?.mode === 'official'; }
+
+function officialConnectionText() {
+  const next = state.officialNetwork;
+  const active = state.launch?.appNetwork;
+  const current = active && active.home === state.home ? active : null;
+  const nextLabel = next?.label || '当前连接待确认';
+  if (!current) return next ? '下次启动：' + nextLabel.replace(/^当前/, '') + '。当前 App 连接待确认。' : '连接方式需重启管理服务后读取。';
+  const changed = next && (current.mode !== next.mode || current.source !== next.source || current.proxyUrl !== next.proxyUrl);
+  return current.label + (changed ? '。待重启：' + nextLabel.replace(/^当前/, '') + '。' : '');
+}
+
+function renderOfficialNetwork() {
+  const official = officialMode();
+  const network = state.officialNetwork;
+  document.querySelector('#official-network-panel').hidden = !official;
+  document.querySelectorAll('[data-official-network]').forEach(button => {
+    const selected = button.dataset.officialNetwork === network?.mode;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+    button.disabled = !official || !loaded || !network || busy || networkBusy || launchBusy || selected;
+  });
+  const text = loaded ? officialConnectionText() : '无法连接管理服务，请确认服务仍在运行。';
+  document.querySelector('#official-network-status').textContent = network?.error || text;
+  for (const selector of ['#current-network', '#launch-network-status']) {
+    const element = document.querySelector(selector);
+    element.hidden = !official;
+    element.textContent = text;
+  }
+  const result = document.querySelector('#official-network-feedback');
+  result.className = officialNetworkFeedback.phase;
+  result.textContent = officialNetworkFeedback.message;
+}
+
+function renderAccountMode() {
+  const account = state.accountSwitch;
+  const official = officialMode();
+  const blocked = account?.blockedReason;
+  document.querySelector('#account-mode-current').textContent = !loaded ? '正在读取…' : official ? '官方 ChatGPT' : '第三方中转';
+  document.querySelectorAll('[data-account-mode]').forEach(button => {
+    const selected = button.dataset.accountMode === account?.mode;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+    button.disabled = busy || networkBusy || launchBusy || !loaded || !account?.available || state.writeBlocked || Boolean(blocked) ||
+      (selected && (button.dataset.accountMode !== 'official' || account?.officialLoggedIn)) ||
+      (button.dataset.accountMode === 'relay' && !account?.relaySaved && !state.keys.length);
+  });
+  document.querySelector('#account-mode-status').textContent = !loaded ? '无法连接管理服务，请确认服务仍在运行。'
+    : !account?.available ? '账号切换功能需要重启管理服务后生效。'
+      : blocked || (official
+        ? account.officialLoggedIn ? '已有官方登录状态。切走前会保存，切回时恢复；登录过期时请重新登录。' : '尚未完成官方登录。首次切换后，请重新打开 Codex 并登录自己的 ChatGPT 账号。'
+        : '当前使用第三方中转。切换到官方前会保存当前第三方配置和认证。');
+  const result = document.querySelector('#account-mode-feedback');
+  result.className = accountFeedback.phase;
+  result.textContent = accountFeedback.message;
+}
+
 function routeMarkup(entry, accountLabel = '', address = '', keyHint = '') {
-  const chosen = viewMode === 'proxy' && entry.name === state.selectedProxyName;
-  const tag = entry.name === state.activeName ? '当前使用' : chosen ? '待接入' : '';
-  return '<article class="route' + (entry.pinned ? ' is-pinned' : '') + (entry.name === state.activeName ? ' is-active' : '') + '" data-pinned="' + Boolean(entry.pinned) + '" data-name="' + escapeHtml(entry.name) + '"><button type="button" class="drag-handle" title="拖动排序；也可用 Alt + 上下方向键调整" aria-label="调整 ' + escapeHtml(entry.name) + ' 的顺序">⠿</button><div class="route-name" title="' + escapeHtml(entry.name) + '">' + escapeHtml(RelayGroups.routeLabel(entry)) +
+  const active = !officialMode() && entry.name === state.activeName;
+  const chosen = !officialMode() && viewMode === 'proxy' && entry.name === state.selectedProxyName;
+  const tag = active ? '当前使用' : chosen ? '待接入' : '';
+  return '<article class="route' + (entry.pinned ? ' is-pinned' : '') + (active ? ' is-active' : '') + '" data-pinned="' + Boolean(entry.pinned) + '" data-name="' + escapeHtml(entry.name) + '"><button type="button" class="drag-handle" title="拖动排序；也可用 Alt + 上下方向键调整" aria-label="调整 ' + escapeHtml(entry.name) + ' 的顺序">⠿</button><div class="route-name" title="' + escapeHtml(entry.name) + '">' + escapeHtml(RelayGroups.routeLabel(entry)) +
     (accountLabel ? '<span class="route-account-label">' + escapeHtml(accountLabel) + '</span>' : '') +
     (address ? '<code class="route-endpoint">' + escapeHtml(address) + '</code>' : '') +
     (keyHint ? '<code class="route-key">API Key · ' + escapeHtml(keyHint) + '</code>' : '') + '</div>' +
@@ -215,8 +275,8 @@ function routeMarkup(entry, accountLabel = '', address = '', keyHint = '') {
 }
 
 function simpleRouteMarkup(entry) {
-  const chosen = viewMode === 'proxy' && entry.name === state.selectedProxyName;
-  const active = entry.name === state.activeName;
+  const chosen = !officialMode() && viewMode === 'proxy' && entry.name === state.selectedProxyName;
+  const active = !officialMode() && entry.name === state.activeName;
   const tag = active ? '当前使用' : chosen ? '待接入' : '';
   const name = escapeHtml(entry.name);
   const provider = escapeHtml(RelayGroups.provider(entry));
@@ -232,7 +292,7 @@ function simpleRouteMarkup(entry) {
 
 function renderSimpleList() {
   const entries = state.keys.filter(entry => (entry.name + ' ' + entry.baseurl).toLowerCase().includes(search));
-  const selectedName = viewMode === 'proxy' ? state.selectedProxyName : state.activeName;
+  const selectedName = officialMode() ? null : viewMode === 'proxy' ? state.selectedProxyName : state.activeName;
   const selected = entries.find(entry => entry.name === selectedName);
   const ordered = selected ? [selected, ...entries.filter(entry => entry !== selected)] : entries;
   const simpleMarkup = ordered.map(simpleRouteMarkup).join('');
@@ -259,7 +319,7 @@ function groupMarkup(group, index) {
   const open = Boolean(search || expanded[expansionKey(group.id)]);
   const visible = open ? group.entries : group.entries.slice(0, 1);
   const accounts = [...group.accounts.values()];
-  const active = group.entries.find(entry => entry.name === state.activeName);
+  const active = !officialMode() && group.entries.find(entry => entry.name === state.activeName);
   const id = 'provider-entries-' + index;
   const host = RelayGroups.providerLabel(group.id);
   const krill = group.id === 'krill';
@@ -294,6 +354,13 @@ function groupMarkup(group, index) {
 }
 
 function renderCurrentRoute() {
+  if (loaded && officialMode()) {
+    currentRoute.dataset.active = 'true';
+    currentRouteName.disabled = true;
+    currentRouteName.textContent = '官方 ChatGPT';
+    document.querySelector('#current-route-mode').textContent = state.accountSwitch.officialLoggedIn ? '已有登录状态' : '待登录自己的 ChatGPT 账号';
+    return;
+  }
   const entry = loaded ? state.keys.find(item => item.name === state.activeName) : null;
   currentRoute.dataset.active = String(Boolean(entry));
   currentRouteName.disabled = !entry;
@@ -304,21 +371,24 @@ function renderCurrentRoute() {
 function renderControls() {
   intelligence.sync();
   renderCurrentRoute();
-  installButton.disabled = busy || !loaded || state.writeBlocked || !state.selectedProxyName;
-  restoreButton.disabled = busy || !loaded || state.writeBlocked || !state.proxyInstalled;
+  renderAccountMode();
+  renderOfficialNetwork();
+  installButton.disabled = officialMode() || busy || !loaded || state.writeBlocked || !state.selectedProxyName;
+  restoreButton.disabled = officialMode() || busy || !loaded || state.writeBlocked || !state.proxyInstalled;
   installButton.hidden = viewMode !== 'proxy';
   installButton.setAttribute('aria-busy', String(busy));
   installButton.textContent = busy ? '正在处理…' : state.proxyInstalled ? '重新接入本地代理' : '接入本地代理';
   installFeedback.className = 'install-feedback ' + feedback.phase;
-  installFeedback.textContent = feedback.message || (state.writeBlocked
+  installFeedback.textContent = feedback.message || (officialMode() ? '当前使用官方 ChatGPT。切回第三方中转后可调整运行方式。' : state.writeBlocked
     ? '检测到未完成的配置写入，已暂停写入。'
     : state.proxyInstalled
       ? 'Codex 配置已指向代理；是否已重启加载，请结合实际请求记录确认。'
       : 'Codex 当前配置为直连。');
-  document.querySelectorAll('.mode-button').forEach(button => { button.disabled = busy || !loaded || state.writeBlocked; });
+  document.querySelectorAll('.mode-button').forEach(button => { button.disabled = officialMode() || busy || !loaded || state.writeBlocked; });
   document.querySelectorAll('.select-button').forEach(button => {
     const chosen = viewMode === 'proxy' ? state.selectedProxyName : state.activeName;
-    button.disabled = busy || state.writeBlocked || button.dataset.name === chosen;
+    button.disabled = officialMode() || busy || state.writeBlocked || button.dataset.name === chosen;
+    button.title = officialMode() ? '请先在「运行与连接」中切回第三方中转' : '';
   });
   const listDisabled = busy || networkBusy || !loaded || state.writeBlocked || !state.listActionsAvailable;
   document.querySelectorAll('.pin-button').forEach(button => { button.disabled = listDisabled; });
@@ -341,7 +411,11 @@ function renderControls() {
 function renderLaunch() {
   const launch = state.launch;
   if (!cliCwdInitialized && launch?.defaultCwd) { cliCwd.value = launch.defaultCwd; cliCwdInitialized = true; }
-  const ready = loaded && launch?.available && state.proxyInstalled && !state.writeBlocked && state.selectedProxyName;
+  const officialBlocked = officialMode() && state.accountSwitch?.blockedReason;
+  const ready = loaded && launch?.available && !state.writeBlocked && !officialBlocked && (officialMode() || (state.proxyInstalled && state.selectedProxyName));
+  document.querySelector('#launch-description').textContent = officialMode()
+    ? '以官方 ChatGPT 方式打开 App 或 CLI；首次使用请在 Codex 中完成账号登录。'
+    : '接入本地代理后，从这里打开 App 或 CLI，后续换站无需重启。';
   document.querySelectorAll('[data-launch]').forEach(button => {
     button.disabled = !ready || busy || networkBusy || launchBusy || launch?.busy ||
       (button.dataset.launch === 'cli' && ['pending', 'running'].includes(launch?.cli?.state));
@@ -352,12 +426,13 @@ function renderLaunch() {
   status.textContent = !loaded ? '无法连接管理服务，请确认服务仍在运行。'
     : !launch ? '启动功能需要重启中转服务后生效。'
       : !launch.available ? '页面启动支持 macOS 和 Windows。'
-        : !state.proxyInstalled ? '请先在「运行与连接」中接入本地代理。'
-          : state.writeBlocked ? '请先处理未完成的配置写入。'
-            : !state.selectedProxyName ? '请先选择一个中转站。'
+        : state.writeBlocked ? '请先处理未完成的配置写入。'
+          : officialBlocked ? officialBlocked
+            : !officialMode() && !state.proxyInstalled ? '请先在「运行与连接」中接入本地代理。'
+            : !officialMode() && !state.selectedProxyName ? '请先选择一个中转站。'
               : launch.cli?.state === 'pending' ? '正在等待终端中的 CLI 启动…'
                 : launch.cli?.state === 'running' ? '本工具启动的 CLI 正在运行，请使用已有终端。'
-                  : '已接入本地代理，可以启动。';
+                  : officialMode() ? state.accountSwitch.officialLoggedIn ? '官方 ChatGPT 已有登录状态，可以启动。' : '可以启动，随后在 Codex 中登录自己的 ChatGPT 账号。' : '已接入本地代理，可以启动。';
   if (!launchBusy && launch?.cli?.state === 'failed') status.textContent = launch.cli.message;
   if (!launchBusy && ready && launch?.cli?.state === 'exited') status.textContent = 'CLI 已退出，可以再次启动。';
 }
@@ -385,6 +460,12 @@ function showFeedback(phase, message) {
   feedback = { phase, message };
   renderControls();
   installFeedback.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+}
+
+function showAccountFeedback(phase, message) {
+  accountFeedback = { phase, message };
+  renderControls();
+  document.querySelector('#account-mode-feedback').scrollIntoView({ block: 'nearest', behavior: 'instant' });
 }
 
 function showMessage(text, success = false) {
@@ -446,7 +527,7 @@ function render() {
   renderRouteViews();
   document.querySelector('#nav-count').textContent = groups.length;
   document.querySelector('#proxy-url').textContent = state.proxyUrl || '—';
-  document.querySelector('#mode-description').textContent = state.proxyInstalled
+  document.querySelector('#mode-description').textContent = officialMode() ? '当前使用官方 ChatGPT。第三方中转列表仍可管理和监测；切回第三方后可调整路由。' : state.proxyInstalled
     ? '当前配置：本地代理。接入与恢复直连后需重启一次 Codex。'
     : viewMode === 'proxy' ? '当前配置：直连，待接入本地代理。' : '当前配置：直连，换站后需重启 Codex。';
   document.querySelector('#provider-identity').textContent = 'Codex provider：' + (state.providerName || '—');
@@ -469,6 +550,10 @@ function render() {
   renderControls();
   availability.sync();
   automatic.sync();
+  if (officialMode()) {
+    document.querySelector('#auto-enabled').disabled = true;
+    document.querySelector('#auto-status').textContent = '官方 ChatGPT 模式 · 第三方自动切换已暂停';
+  }
 }
 
 async function api(endpoint, payload) {
@@ -513,8 +598,10 @@ async function perform(endpoint, payload, localFeedback = false) {
   busy = true;
   mutationVersion++;
   const listAction = endpoint === '/api/pin' || endpoint === '/api/reorder';
+  const accountAction = endpoint === '/api/account-mode';
   if (listAction) listFeedback.textContent = '正在保存…';
-  if (localFeedback) showFeedback('pending', '正在更新 Codex 配置，请稍候…');
+  if (accountAction) showAccountFeedback('pending', '正在保存当前账号方式并切换，请稍候…');
+  else if (localFeedback) showFeedback('pending', '正在更新 Codex 配置，请稍候…');
   else renderControls();
   try {
     const data = await api(endpoint, payload);
@@ -522,13 +609,16 @@ async function perform(endpoint, payload, localFeedback = false) {
     loaded = true;
     if (endpoint === '/api/proxy/restore') viewMode = 'direct';
     if (endpoint === '/api/proxy/install') viewMode = 'proxy';
+    if (accountAction) { viewMode = state.mode; feedback = { phase: 'idle', message: '' }; }
     render();
-    if (localFeedback) showFeedback('success', data.message);
+    if (accountAction) showAccountFeedback('success', data.message + (data.restartRequired ? ' 请完全退出并重新启动 Codex App 和正在使用的 CLI，让新模式生效。' : ''));
+    else if (localFeedback) showFeedback('success', data.message);
     else if (listAction) listFeedback.textContent = data.message;
     else showMessage(data.message, true);
     return true;
   } catch (error) {
-    if (localFeedback) showFeedback('error', errorMessage(error));
+    if (accountAction) showAccountFeedback('error', errorMessage(error));
+    else if (localFeedback) showFeedback('error', errorMessage(error));
     else if (listAction) listFeedback.textContent = errorMessage(error);
     else showMessage(errorMessage(error));
     return false;
@@ -536,7 +626,7 @@ async function perform(endpoint, payload, localFeedback = false) {
 }
 
 document.querySelectorAll('.mode-button').forEach(button => button.addEventListener('click', async () => {
-  if (busy) return;
+  if (button.disabled || busy || officialMode()) return;
   if (button.dataset.mode === 'direct' && state.proxyInstalled) {
     await perform('/api/proxy/restore', {}, true);
   } else {
@@ -544,6 +634,24 @@ document.querySelectorAll('.mode-button').forEach(button => button.addEventListe
     feedback = { phase: 'idle', message: '' };
     render();
   }
+}));
+document.querySelectorAll('[data-account-mode]').forEach(button => button.addEventListener('click', () => {
+  if (button.disabled || busy || networkBusy || launchBusy || draggedName || automatic.busy) return;
+  perform('/api/account-mode', { mode: button.dataset.accountMode });
+}));
+document.querySelectorAll('[data-official-network]').forEach(button => button.addEventListener('click', async () => {
+  if (button.disabled || busy || networkBusy || launchBusy) return;
+  busy = true; mutationVersion++;
+  officialNetworkFeedback = { phase: 'pending', message: '正在保存连接方式…' };
+  renderControls();
+  try {
+    const result = await api('/api/official-network', { mode: button.dataset.officialNetwork });
+    Object.assign(state, result.status);
+    officialNetworkFeedback = { phase: 'success', message: result.message };
+    render();
+  } catch (error) {
+    officialNetworkFeedback = { phase: 'error', message: errorMessage(error) };
+  } finally { busy = false; renderControls(); }
 }));
 document.querySelectorAll('.route-view-tab').forEach(button => button.addEventListener('click', () => {
   routeView = button.dataset.routeView === 'advanced' ? 'advanced' : 'simple';
@@ -591,7 +699,7 @@ routesPanel.addEventListener('click', async event => {
     return;
   }
   const button = event.target.closest('.select-button');
-  if (button) await perform('/api/select', { name: button.dataset.name, mode: viewMode });
+  if (button && !button.disabled && !officialMode()) await perform('/api/select', { name: button.dataset.name, mode: viewMode });
 });
 document.querySelector('#edit-cancel').addEventListener('click', () => { if (!editBusy) editDialog.close(); });
 editDialog.addEventListener('cancel', event => { if (editBusy) event.preventDefault(); });
@@ -674,8 +782,8 @@ list.addEventListener('keydown', async event => {
     [...list.querySelectorAll(provider ? '.provider-card' : '.route')].find(item => item.dataset.name === row.dataset.name)?.querySelector('.drag-handle').focus({ preventScroll: true });
   }
 });
-installButton.addEventListener('click', () => perform('/api/proxy/install', { name: state.selectedProxyName }, true));
-restoreButton.addEventListener('click', () => perform('/api/proxy/restore', {}, true));
+installButton.addEventListener('click', () => { if (!installButton.disabled && !officialMode()) perform('/api/proxy/install', { name: state.selectedProxyName }, true); });
+restoreButton.addEventListener('click', () => { if (!restoreButton.disabled && !officialMode()) perform('/api/proxy/restore', {}, true); });
 document.querySelector('#refresh-status').addEventListener('click', load);
 document.querySelector('#add-open').addEventListener('click', () => { addForm.reset(); formMessage.textContent = ''; addDialog.showModal(); });
 document.querySelector('#add-cancel').addEventListener('click', () => { if (!busy) addDialog.close(); });

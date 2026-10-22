@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { start } = require('../../managed-relay-server');
-const { settingsPath, readSettings, writeSettings, resolveHome, displayPath } = require('../settings');
+const { settingsPath, readSettings, writeSettings, readOfficialNetworkMode, writeOfficialNetworkMode, resolveHome, displayPath } = require('../settings');
 const { loadCodexConfig, resolveCodexPaths } = require('../codex-config');
 
 const CONFIG = 'model_provider = "relay"\n\n[model_providers.relay]\nname = "relay"\nbase_url = "https://api.example.com/v1"\nwire_api = "responses"\n';
@@ -61,6 +61,15 @@ test('readSettings tolerates a missing or corrupt settings file', async t => {
   assert.deepEqual(await readSettings(), {}, '损坏的设置文件不应阻止启动');
   await writeSettings({ home: '/tmp/example' });
   assert.deepEqual(await readSettings(), { home: '/tmp/example' });
+});
+
+test('official network mode defaults to auto and persists only the supported choices', async t => {
+  await isolatedSettings(t);
+  assert.equal(await readOfficialNetworkMode(), 'auto');
+  assert.equal(await writeOfficialNetworkMode('wifi'), 'wifi');
+  assert.equal(await readOfficialNetworkMode(), 'wifi');
+  await assert.rejects(writeOfficialNetworkMode('proxy'), /官方连接方式无效/);
+  assert.equal(await readOfficialNetworkMode(), 'wifi');
 });
 
 test('resolveHome rejects paths that are not Codex config directories', async t => {

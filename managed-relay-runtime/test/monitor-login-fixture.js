@@ -9,7 +9,8 @@ const TOKEN = 'fixture.' + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now
 const PASSWORD = 'fixture-password';
 const TEMP_TOKEN = 'fixture-temp-token';
 const REFRESH_TOKEN = 'fixture-refresh-token';
-const INPUT_TOKEN = TOKEN.replace('fixture.', 'inputfixture.');
+// Login and monitor must share a token even when module loads cross a second.
+const INPUT_TOKEN = require('./input-fixture').TOKEN;
 
 function subscriptions() {
   const now = Date.now();

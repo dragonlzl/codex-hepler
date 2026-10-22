@@ -1,6 +1,6 @@
 # Codex 中转站配置页面
 
-本地网页界面，用来管理 Codex 的多个中转站（relay）：保存一组「名称 + API Key + Base URL」，在多个中转站之间切换，并可选择让 Codex 走本机转发代理。
+本地网页界面，用来切换 Codex 官方 ChatGPT 账号与第三方中转，并管理多个中转站（relay）：保存一组「名称 + API Key + Base URL」，在多个中转站之间切换，并可选择让 Codex 走本机转发代理。
 
 所有服务只绑定 `127.0.0.1`，不对局域网或公网开放。
 
@@ -12,10 +12,10 @@
 | --- | --- | --- | --- |
 | 管理服务（推荐） | `sh start-managed-relay.sh` | `start-managed-relay.cmd` | 管理页面（3790）+ 本地转发代理（3211），可接入／恢复 Codex 配置 |
 | 配置页面（基础版） | `npm start` | `npm start` | 只管理中转站列表，页面在 3789，不启动代理 |
-| Codex App 启动入口 | `sh start-codex-local.sh` | `start-codex-local.cmd` | 给 Codex 进程注入本机代理绕过规则，仅接入本地代理后需要 |
+| Codex App 启动入口 | `sh start-codex-local.sh` | `start-codex-local.cmd` | 支持官方账号启动；第三方本地代理模式注入本机代理绕过规则 |
 | Codex CLI 启动入口 | `sh start-codex-cli.sh` | `start-codex-cli.cmd` | 在当前终端启动 CLI，使用管理页面的配置目录及本机绕过规则 |
 
-中转站页面提供「启动 Codex App」「启动 Codex CLI」按钮。CLI 会自动打开独立终端，可填写项目工作目录；App 已运行时提示先退出。两个按钮都要求先接入本地代理。首次更新此功能后需重启管理服务。
+中转站页面提供「启动 Codex App」「启动 Codex CLI」按钮。CLI 会自动打开独立终端，可填写项目工作目录；App 已运行时提示先退出。官方 ChatGPT 模式可直接启动；第三方模式要求先接入本地代理。首次更新此功能后需重启管理服务。
 
 **依赖**：都需要 Node.js 22.13 或更高版本，从 <https://nodejs.org> 安装 LTS 版。
 
@@ -24,6 +24,21 @@
 - `npm start`（基础版）无第三方依赖。
 
 管理服务的行为见 [MANAGED-RELAY-README.md](MANAGED-RELAY-README.md)，Codex 启动入口见 [CODEX-LOCAL-NETWORK.md](CODEX-LOCAL-NETWORK.md)，故障排查见 [START-HOWTO.md](START-HOWTO.md)。
+
+## 官方 ChatGPT 与第三方中转切换
+
+完整版「运行与连接」页面提供「官方 ChatGPT」「第三方中转」两个账号方式。切换会一起保存和恢复配置及认证，切走前保存当前方式，切回来时恢复对应状态；第三方之间的代理换站仍保持原来的即时切换行为。
+
+首次恢复官方登录：
+
+1. 结束当前工作并完全退出 Codex App 和 CLI，打开「运行与连接」，选择「官方 ChatGPT」。工具会先保存现有第三方配置和认证，再准备官方登录环境。
+2. 重新启动 Codex；选择「Sign in with ChatGPT」，通过浏览器登录自己的 ChatGPT 账号。也可在官方模式的 CLI 中运行 `codex login`。本工具不代替 Codex 进行浏览器登录。
+3. 下次需要中转时，再结束工作并退出 Codex，选择「第三方中转」，重新启动。此时会保存刚完成的官方登录状态，并恢复第三方配置及认证。
+4. 再次选择「官方 ChatGPT」后重新启动，即可恢复已保存的官方登录状态。令牌过期或被撤销时仍需重新登录。
+
+当前保存一套官方账号状态和一套第三方状态，暂不提供多个官方账号列表。官方模式下仍能编辑中转列表、查看余额和监测状态；第三方应用配置及自动换站暂停，切回第三方后再启用。官方模式在「运行与连接」中提供「自动识别」和「使用 Wi-Fi」：前者使用 Flyingbird 等设备代理，后者清除旧代理并让 Codex 直接使用当前 Wi-Fi；切换后需完全退出并重新启动 Codex。页面会区分“当前使用”和“下次启动”，避免把尚未重启的设置误认为已生效。第三方网络设置只用于本工具访问中转，不控制官方 ChatGPT 的联网方式。
+
+切换产生的账号状态和备份只保存在所选 Codex 配置目录下，包含敏感认证信息，请勿分享或提交到 Git。工具只支持文件形式的 Codex 凭据；若当前使用系统钥匙串等凭据存储，会明确拒绝切换并给出原因。
 
 ## 项目配置文件 `codex-relay.config.json`
 

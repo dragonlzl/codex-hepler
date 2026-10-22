@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
-const { launchContext } = require('./codex-launch');
+const { launchContext, macLaunchProxy, clearProxyEnvironment } = require('./codex-launch');
 const { configPath, loadCodexConfig, expandPath } = require('./codex-config');
 
 // PowerShell literals are data, including spaces, apostrophes and shell metacharacters.
@@ -54,11 +54,16 @@ async function launchCli(options = {}) {
   const executable = await findCli({ ...options, env: context.env });
   const cwd = await workingDirectory(options.cwd);
   const argv = options.argv || [];
-  if (argv.length === 1 && argv[0] === '--check') return { message: '检查通过：Codex CLI 与本地代理可用。', executable, home: context.home, cwd, code: 0 };
+  if (argv.length === 1 && argv[0] === '--check') return { message: context.official ? '检查通过：Codex CLI 与官方账号模式可用。' : '检查通过：Codex CLI 与本地代理可用。', executable, home: context.home, cwd, code: 0 };
   const args = argv[0] === '--' ? argv.slice(1) : argv;
   const command = cliCommand(executable, args, platform, context.env);
+  const officialProxy = context.official && (platform === 'darwin' || context.status.officialNetwork?.mode === 'wifi')
+    ? await macLaunchProxy({ env: context.env, officialNetworkMode: context.status.officialNetwork?.mode,
+      readSystemProxy: options.readSystemProxy, readFlyingBirdProxy: options.readFlyingBirdProxy })
+    : { source: 'relay', environment: {} };
+  const childEnvironment = officialProxy.source === 'wifi' ? clearProxyEnvironment(context.env) : { ...context.env, ...officialProxy.environment };
   const code = await new Promise((resolve, reject) => {
-    const child = (options.spawn || spawn)(command.file, command.args, { cwd, env: context.env, stdio: 'inherit' });
+    const child = (options.spawn || spawn)(command.file, command.args, { cwd, env: childEnvironment, stdio: 'inherit' });
     // The foreground terminal sends Ctrl+C to both processes; keep the wrapper
     // alive until the CLI exits so session status remains accurate.
     const onInterrupt = () => {};

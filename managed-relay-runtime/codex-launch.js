@@ -4,9 +4,11 @@ const http = require('node:http');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 const { configPath, loadCodexConfig, resolveCodexPaths, configHint, expandPath } = require('./codex-config');
+const { readMacProxies, detectFlyingBirdProxy, systemProxyFor } = require('./system-proxy');
 
 const run = promisify(execFile);
 const LOCAL_HOSTS = ['127.0.0.1', 'localhost', '::1'];
+const PROXY_ENVIRONMENT_NAMES = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'];
 
 function bypassList(...values) {
   return [...new Set([...values.flatMap(value => (value || '').split(',').map(s => s.trim()).filter(Boolean)), ...LOCAL_HOSTS])].join(',');
@@ -16,6 +18,76 @@ function launchArguments(app, values, home) {
   const bypass = bypassList(...values);
   return ['-a', app, '--env', 'NO_PROXY=' + bypass, '--env', 'no_proxy=' + bypass,
     ...(home ? ['--env', 'CODEX_HOME=' + home] : [])];
+}
+
+function proxyEnvironment(proxyUrl) {
+  if (!proxyUrl) return {};
+  return {
+    HTTP_PROXY: proxyUrl,
+    http_proxy: proxyUrl,
+    HTTPS_PROXY: proxyUrl,
+    https_proxy: proxyUrl,
+    ALL_PROXY: proxyUrl,
+    all_proxy: proxyUrl,
+  };
+}
+
+async function macLaunchProxy(options = {}) {
+  if (options.officialNetworkMode === 'wifi') return { proxyUrl: '', source: 'wifi', environment: {} };
+  let settings = {};
+  try { settings = await (options.readSystemProxy || readMacProxies)(); } catch {}
+  const system = systemProxyFor(new URL('https://chatgpt.com'), settings);
+  if (system.source === 'system-bypass' || system.source === 'system-pac') {
+    return { proxyUrl: '', source: system.source, environment: {} };
+  }
+  if (system.proxyUrl) return { proxyUrl: system.proxyUrl, source: 'system', environment: proxyEnvironment(system.proxyUrl) };
+  const env = options.env || process.env;
+  const inheritedProxy = env.https_proxy || env.HTTPS_PROXY || env.all_proxy || env.ALL_PROXY || '';
+  if (inheritedProxy) {
+    let parsed;
+    try {
+      parsed = new URL(inheritedProxy);
+      if (!['http:', 'https:', 'socks4:', 'socks4a:', 'socks5:', 'socks5h:'].includes(parsed.protocol) || !parsed.hostname ||
+          parsed.search || parsed.hash || (parsed.pathname && parsed.pathname !== '/')) throw new Error();
+    } catch { throw new Error('启动环境中的代理地址无效，请检查 HTTPS_PROXY 或 ALL_PROXY。'); }
+    if (parsed.username || parsed.password) throw new Error('官方 App 启动暂不支持需要账号密码的代理，请使用 Flyingbird 的本机无认证代理。');
+    return { proxyUrl: inheritedProxy, source: 'environment', environment: proxyEnvironment(inheritedProxy) };
+  }
+  const readFlyingBird = options.readFlyingBirdProxy || detectFlyingBirdProxy;
+  const flyingbird = await readFlyingBird();
+  if (!flyingbird?.proxyUrl) return { proxyUrl: '', source: 'direct', environment: {} };
+  return { proxyUrl: flyingbird.proxyUrl, source: flyingbird.source || 'flyingbird-auto', environment: proxyEnvironment(flyingbird.proxyUrl) };
+}
+
+function clearProxyEnvironment(environment) {
+  const next = { ...environment };
+  for (const name of PROXY_ENVIRONMENT_NAMES) delete next[name];
+  return next;
+}
+
+function officialNetworkLabel(source) {
+  return ['system', 'system-http', 'system-https', 'system-socks', 'system-pac', 'environment', 'flyingbird-auto'].includes(source)
+    ? '当前使用设备代理' : source === 'wifi' || source === 'direct' || source === 'system-bypass' ? '当前使用 Wi-Fi' : '当前连接待确认';
+}
+
+async function officialNetworkStatus(mode = 'auto', options = {}) {
+  if (mode === 'wifi') return { mode: 'wifi', source: 'wifi', proxyUrl: '', label: officialNetworkLabel('wifi') };
+  try {
+    const route = await macLaunchProxy({ ...options, officialNetworkMode: 'auto' });
+    const proxy = route.proxyUrl ? new URL(route.proxyUrl) : null;
+    return { mode: 'auto', source: route.source, proxyUrl: proxy ? `${proxy.protocol}//${proxy.host}` : '', label: officialNetworkLabel(route.source) };
+  } catch (error) {
+    return { mode: 'auto', source: 'unknown', proxyUrl: '', label: '当前连接待确认', error: error.message };
+  }
+}
+
+function macProcessArguments(proxyUrl, bypass = LOCAL_HOSTS.join(',')) {
+  if (!proxyUrl) return [];
+  const proxy = new URL(proxyUrl);
+  if (proxy.username || proxy.password) return [];
+  const protocol = proxy.protocol === 'socks5h:' ? 'socks5:' : proxy.protocol === 'socks4a:' ? 'socks4:' : proxy.protocol;
+  const exclusions = bypass.split(',').filter(Boolean).map(host => host === '::1' ? '[::1]' : host).join(';');
+  return [`--proxy-server=${protocol}//${proxy.host}`, `--proxy-bypass-list=${exclusions}`];
 }
 
 // ---------------------------------------------------------------- macOS
@@ -68,8 +140,12 @@ async function macInheritedBypass() {
   return inherited;
 }
 
-async function macLaunch(app, args) {
-  await run('/usr/bin/open', args, { timeout: 10000 });
+async function macLaunch(app, args, environment = process.env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(app.executable, args, { detached: true, stdio: 'ignore', env: environment });
+    child.once('error', reject);
+    child.once('spawn', () => { child.unref(); resolve({ pid: child.pid }); });
+  });
 }
 
 // -------------------------------------------------------------- Windows
@@ -272,13 +348,13 @@ async function winInheritedBypass(env = process.env) {
   return inherited;
 }
 
-function winLaunch(app, env) {
+function winLaunch(app, env, args = []) {
   // 直接以注入后的环境变量启动子进程，等价于 macOS 的 `open --env`，
   // 不需要修改系统或用户级环境变量。
   return new Promise((resolve, reject) => {
-    const child = spawn(app.executable, [], { detached: true, stdio: 'ignore', env });
+    const child = spawn(app.executable, args, { detached: true, stdio: 'ignore', env });
     child.once('error', reject);
-    child.once('spawn', () => { child.unref(); resolve(); });
+    child.once('spawn', () => { child.unref(); resolve({ pid: child.pid }); });
   });
 }
 
@@ -340,11 +416,37 @@ async function launch(options = {}) {
   const bypass = bypassList(context.env.NO_PROXY, context.env.no_proxy, ...inherited);
   const childEnv = { ...context.env, NO_PROXY: bypass, no_proxy: bypass };
   if (check) {
-    return { message: `检查通过：中转服务可用，Codex 已配置本地代理。${running ? 'Codex 当前仍在运行；启动前请完全退出。' : 'Codex 已退出，可以启动。'}`, executable: app.executable, home: context.home };
+    return { message: `检查通过：管理服务可用，Codex 已配置${context.official ? '官方账号' : '本地代理'}。${running ? 'Codex 当前仍在运行；启动前请完全退出。' : 'Codex 已退出，可以启动。'}`, executable: app.executable, home: context.home };
   }
-  if (platformName === 'darwin') await platform.launch(app, launchArguments(app.app, [bypass], context.home));
-  else await platform.launch(app, childEnv);
-  return { message: '已请求启动 Codex App，本机绕过规则随本次进程生效。', executable: app.executable, home: context.home };
+  let proxyMessage = '';
+  let officialNetwork;
+  if (platformName === 'darwin') {
+    const proxy = context.official ? await macLaunchProxy({ ...options, env: context.env, officialNetworkMode: context.status.officialNetwork?.mode }) : { proxyUrl: '', source: 'relay', environment: {} };
+    const launchEnvironment = context.official && proxy.source === 'wifi' ? clearProxyEnvironment(childEnv) : { ...childEnv, ...proxy.environment };
+    const launchArguments = context.official && proxy.source === 'wifi' ? ['--no-proxy-server'] : macProcessArguments(proxy.proxyUrl, bypass);
+    const launched = await platform.launch(app, launchArguments, launchEnvironment);
+    if (context.official) {
+      officialNetwork = { mode: context.status.officialNetwork?.mode || 'auto', source: proxy.source,
+        label: officialNetworkLabel(proxy.source), proxyUrl: proxy.proxyUrl ? `${new URL(proxy.proxyUrl).protocol}//${new URL(proxy.proxyUrl).host}` : '', pid: launched?.pid };
+      if (proxy.proxyUrl) proxyMessage = ` 本次进程代理：${new URL(proxy.proxyUrl).protocol}//${new URL(proxy.proxyUrl).host}（${proxy.source}）。`;
+      else if (proxy.source === 'system-pac') proxyMessage = ' 已检测到系统 PAC；App 沿用系统自动代理，推理进程未注入固定代理地址。';
+      else if (proxy.source === 'system-bypass' || proxy.source === 'wifi') proxyMessage = ' 当前使用 Wi-Fi，本次不使用设备代理。';
+      else proxyMessage = ' 未发现可用的显式代理；如当前网络需要代理，请在 Flyingbird 中确认已连接并启用了本机代理端口。';
+      proxyMessage += '\n' + officialNetwork.label;
+    }
+  }
+  else {
+    const wifi = context.official && context.status.officialNetwork?.mode === 'wifi';
+    const launched = await platform.launch(app, wifi ? clearProxyEnvironment(childEnv) : childEnv, wifi ? ['--no-proxy-server'] : []);
+    if (context.official) {
+      const proxy = childEnv.https_proxy || childEnv.HTTPS_PROXY || childEnv.all_proxy || childEnv.ALL_PROXY;
+      const source = wifi ? 'wifi' : proxy ? 'environment' : 'unknown';
+      officialNetwork = { mode: wifi ? 'wifi' : 'auto', source, label: officialNetworkLabel(source), proxyUrl: '', pid: launched?.pid };
+      proxyMessage = '\n' + officialNetwork.label;
+    }
+  }
+  return { message: context.official ? '已请求启动 Codex App，请在应用中完成或确认 ChatGPT 登录。' + proxyMessage : '已请求启动 Codex App，本机绕过规则随本次进程生效。', executable: app.executable, home: context.home,
+    ...(officialNetwork ? { officialNetwork } : {}) };
 }
 
 // 以管理服务当前目录为准，避免页面检查的是 A 目录、启动却读 B 目录。
@@ -352,11 +454,18 @@ async function launchContext({ env = process.env, status, getStatus = relayStatu
   const port = Number(env.RELAY_UI_PORT || 3790);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('RELAY_UI_PORT 无效。');
   const current = status || await getStatus(port);
-  if (!current.proxyInstalled || current.mode !== 'proxy') throw new Error('Codex 尚未接入本地代理，请先在管理页面接入。');
+  const official = current.accountSwitch?.mode === 'official';
+  if (official && current.accountSwitch.blockedReason) throw new Error(current.accountSwitch.blockedReason);
+  if (official && ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_BASE', 'CHATGPT_BASE_URL'].some(key => env[key])) {
+    throw new Error('官方账号启动检测到认证或地址环境变量覆盖，请去掉覆盖后重启管理服务或终端。');
+  }
+  if (!official && (!current.proxyInstalled || current.mode !== 'proxy')) throw new Error('Codex 尚未接入本地代理，请先在管理页面接入。');
   if (current.writeBlocked) throw new Error('存在未完成的配置写入，请先恢复配置后再启动。');
-  if (!current.selectedProxyName) throw new Error('请先选择一个中转站。');
-  const url = new URL(current.proxyUrl);
-  if (url.hostname !== '127.0.0.1' || url.protocol !== 'http:') throw new Error('本地代理地址不符合此启动入口要求。');
+  if (!official) {
+    if (!current.selectedProxyName) throw new Error('请先选择一个中转站。');
+    const url = new URL(current.proxyUrl);
+    if (url.hostname !== '127.0.0.1' || url.protocol !== 'http:') throw new Error('本地代理地址不符合此启动入口要求。');
+  }
   const home = expandPath(current.home, env);
   if (!home) throw new Error('管理服务未返回 Codex 配置目录，请重启中转服务。');
   const explicit = expandPath(env.CODEX_HOME, env);
@@ -366,7 +475,7 @@ async function launchContext({ env = process.env, status, getStatus = relayStatu
   };
   if (explicit && await canonical(explicit) !== await canonical(home)) throw new Error('CODEX_HOME 与管理页面的配置目录不同，请保持一致后再启动。');
   const bypass = bypassList(env.NO_PROXY, env.no_proxy);
-  return { home, status: current, env: { ...env, CODEX_HOME: home, NO_PROXY: bypass, no_proxy: bypass } };
+  return { home, official, status: current, env: { ...env, CODEX_HOME: home, NO_PROXY: bypass, no_proxy: bypass } };
 }
 
 if (require.main === module) launch({ argv: process.argv.slice(2) }).then(result => {
@@ -376,4 +485,4 @@ if (require.main === module) launch({ argv: process.argv.slice(2) }).then(result
   console.log('应用：' + result.executable);
   console.log('Codex 配置目录：' + result.home);
 }).catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { bypassList, launchArguments, relayStatus, launchContext, findWinApp, findUpdatedWinApp, findRegisteredWinApp, listRegisteredWinAppLocations, findMacApp, describeConfig, launch };
+module.exports = { bypassList, launchArguments, macLaunchProxy, clearProxyEnvironment, macProcessArguments, officialNetworkLabel, officialNetworkStatus, relayStatus, launchContext, findWinApp, findUpdatedWinApp, findRegisteredWinApp, listRegisteredWinAppLocations, findMacApp, describeConfig, launch };

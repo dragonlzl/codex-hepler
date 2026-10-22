@@ -7,7 +7,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { EventEmitter } = require('node:events');
 const { launch, launchContext } = require('../codex-launch');
-const { findCli, cliCommand } = require('../codex-cli-launch');
+const { findCli, cliCommand, launchCli } = require('../codex-cli-launch');
 const { createLauncher, openTerminal, findITerm } = require('../codex-launcher');
 const { start } = require('../../managed-relay-server');
 const run = promisify(execFile);
@@ -31,7 +31,65 @@ test('launch context preserves bypasses, uses the managed home and rejects misma
   await assert.rejects(launchContext({ status: { ...status, writeBlocked: true } }), /未完成/);
 });
 
+test('official account launch uses the managed home without requiring a relay selection', async t => {
+  const { home } = await fixture(t);
+  const status = { home, mode: 'direct', proxyInstalled: false, selectedProxyName: null,
+    accountSwitch: { mode: 'official' } };
+  const context = await launchContext({ env: {}, status });
+  assert.equal(context.official, true);
+  assert.equal(context.env.CODEX_HOME, home);
+  await assert.rejects(launchContext({ env: {}, status: { ...status, writeBlocked: true } }), /未完成/);
+  await assert.rejects(launchContext({ env: {}, status: { ...status, accountSwitch: { mode: 'official', blockedReason: 'fixture storage conflict' } } }), /storage conflict/);
+  for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_BASE', 'CHATGPT_BASE_URL']) {
+    await assert.rejects(launchContext({ env: { [key]: 'fixture-override' }, status }), /环境变量覆盖/);
+  }
+  const launches = [];
+  const adapter = {
+    findApp: async () => ({ app: '/test/ChatGPT.app', executable: '/test/ChatGPT' }),
+    isRunning: async () => false, inheritedBypass: async () => [],
+    launch: async (...args) => { launches.push(args); }, quitHint: '请完全退出',
+  };
+  const check = await launch({ env: {}, status, adapter, platform: 'darwin', argv: ['--check'] });
+  assert.match(check.message, /官方账号/);
+  assert.equal(launches.length, 0);
+  const result = await launch({ env: {}, status, adapter, platform: 'darwin',
+    readSystemProxy: async () => ({}),
+    readFlyingBirdProxy: async () => ({ proxyUrl: 'http://127.0.0.1:7892', source: 'flyingbird-auto' }),
+  });
+  assert.match(result.message, /ChatGPT 登录/);
+  assert.match(result.message, /127\.0\.0\.1:7892/);
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0][1][0], '--proxy-server=http://127.0.0.1:7892');
+  assert.equal(launches[0][2].CODEX_HOME, home);
+  assert.equal(launches[0][2].HTTPS_PROXY, 'http://127.0.0.1:7892');
+  assert.equal(launches[0][2].ALL_PROXY, 'http://127.0.0.1:7892');
+});
+
 for (const platform of ['darwin', 'win32']) {
+  test(`${platform} official Wi-Fi launch clears inherited proxies and disables the App proxy`, async t => {
+    const { home } = await fixture(t);
+    const status = { home, accountSwitch: { mode: 'official' }, officialNetwork: { mode: 'wifi' } };
+    const env = { HTTPS_PROXY: 'http://stale.invalid:7892', https_proxy: 'http://stale.invalid:7892',
+      HTTP_PROXY: 'http://stale.invalid:7892', http_proxy: 'http://stale.invalid:7892',
+      ALL_PROXY: 'http://stale.invalid:7892', all_proxy: 'http://stale.invalid:7892' };
+    let captured;
+    const adapter = { findApp: async () => ({ executable: '/fixture/Codex' }), isRunning: async () => false,
+      inheritedBypass: async () => [], launch: async (...args) => { captured = args; return { pid: 12345 }; } };
+    const result = await launch({ env, status, adapter, platform,
+      readSystemProxy: async () => assert.fail('must skip system proxy'),
+      readFlyingBirdProxy: async () => assert.fail('must skip FlyingBird'),
+    });
+    const childEnv = captured[platform === 'darwin' ? 2 : 1];
+    const args = captured[platform === 'darwin' ? 1 : 2];
+    assert.deepEqual(args, ['--no-proxy-server']);
+    for (const name of Object.keys(env)) assert.equal(childEnv[name], undefined);
+    assert.equal(childEnv.CODEX_HOME, home);
+    assert.match(childEnv.NO_PROXY, /127\.0\.0\.1/);
+    assert.match(result.message, /当前使用 Wi-Fi/);
+    assert.equal(result.officialNetwork.pid, 12345);
+    assert.equal(env.HTTPS_PROXY, 'http://stale.invalid:7892');
+  });
+
   test(`${platform} refuses to launch an already running App and passes the managed home on a fresh launch`, async t => {
     const { home, status } = await fixture(t);
     let running = true, calls = [];
@@ -46,12 +104,57 @@ for (const platform of ['darwin', 'win32']) {
     await launch({ status, env: {}, adapter, platform, argv: ['--check'] });
     assert.equal(calls.length, 0);
     running = false;
-    await launch({ status, env: {}, adapter, platform });
+    await launch({ status, env: {}, adapter, platform,
+      readSystemProxy: async () => { throw new Error('relay launch must not read system proxy'); },
+      readFlyingBirdProxy: async () => { throw new Error('relay launch must not discover FlyingBird'); },
+    });
     assert.equal(calls.length, 1);
-    if (platform === 'darwin') assert.ok(calls[0][1].includes('CODEX_HOME=' + home));
+    if (platform === 'darwin') {
+      assert.deepEqual(calls[0][1], []);
+      assert.equal(calls[0][2].CODEX_HOME, home);
+      assert.equal(calls[0][2].HTTPS_PROXY, undefined);
+      assert.match(calls[0][2].NO_PROXY, /\.inherited/);
+    }
     else { assert.equal(calls[0][1].CODEX_HOME, home); assert.match(calls[0][1].NO_PROXY, /\.inherited/); }
   });
 }
+
+test('official CLI Wi-Fi launch clears terminal proxy variables before spawning', async t => {
+  const { home } = await fixture(t);
+  const executable = path.join(home, 'fake-codex');
+  await fs.writeFile(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  let captured;
+  const env = { CODEX_CLI_PATH: executable, HTTPS_PROXY: 'http://stale.invalid:7892', ALL_PROXY: 'http://stale.invalid:7892' };
+  const result = await launchCli({ platform: 'darwin', cwd: home, env,
+    status: { home, accountSwitch: { mode: 'official' }, officialNetwork: { mode: 'wifi' } },
+    readSystemProxy: async () => assert.fail('must skip system proxy'),
+    spawn: (file, args, options) => {
+      captured = options;
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('exit', 0));
+      return child;
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.equal(captured.env.HTTPS_PROXY, undefined);
+  assert.equal(captured.env.ALL_PROXY, undefined);
+  assert.equal(captured.env.CODEX_HOME, home);
+});
+
+test('launcher retains the current App connection until that process exits', async t => {
+  const { home } = await fixture(t);
+  let alive = true;
+  const launcher = createLauncher({ platform: 'darwin', isAlive: () => alive,
+    launchApp: async () => ({ message: 'fixture launch', officialNetwork: { mode: 'auto', source: 'system', proxyUrl: 'http://127.0.0.1:7892', label: '当前使用设备代理', pid: 12345 } }),
+  });
+  const status = { home, accountSwitch: { mode: 'official' }, officialNetwork: { mode: 'auto' } };
+  await launcher.start('app', { env: {}, status });
+  status.officialNetwork.mode = 'wifi';
+  assert.equal((await launcher.snapshot()).appNetwork.mode, 'auto');
+  assert.equal((await launcher.snapshot()).appNetwork.home, home);
+  alive = false;
+  assert.equal((await launcher.snapshot()).appNetwork, null);
+});
 
 test('CLI discovery prefers explicit paths and Windows npm wrappers use PowerShell literals', async t => {
   const { home } = await fixture(t);

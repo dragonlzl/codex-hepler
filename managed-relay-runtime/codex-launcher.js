@@ -69,6 +69,7 @@ function createLauncher(options = {}) {
   let launching = false;
   let session = null;
   let lastCli = { state: 'idle' };
+  let appNetwork = null;
 
   async function snapshot() {
     let cli = lastCli;
@@ -86,7 +87,8 @@ function createLauncher(options = {}) {
         if (session === current) { session = null; lastCli = cli; }
       }
     }
-    return { available: ['darwin', 'win32'].includes(platform), busy: launching, cli, defaultCwd: os.homedir() };
+    if (appNetwork?.pid && !(options.isAlive || isAlive)(appNetwork.pid)) appNetwork = null;
+    return { available: ['darwin', 'win32'].includes(platform), busy: launching, cli, defaultCwd: os.homedir(), appNetwork };
   }
 
   async function start(target, { status, env = process.env, config, cwd } = {}) {
@@ -96,7 +98,11 @@ function createLauncher(options = {}) {
     launching = true;
     try {
       const context = await launchContext({ env, status });
-      if (target === 'app') return await (options.launchApp || launch)({ env: context.env, status, config, platform });
+      if (target === 'app') {
+        const result = await (options.launchApp || launch)({ env: context.env, status, config, platform });
+        appNetwork = result.officialNetwork ? { ...result.officialNetwork, home: context.home } : null;
+        return result;
+      }
       const state = await snapshot();
       if (['pending', 'running'].includes(state.cli.state)) throw new Error('本工具启动的 Codex CLI 正在运行或等待终端打开，请使用已有终端。');
       const executable = await (options.findCli || findCli)({ env: context.env, config, platform });

@@ -5,6 +5,7 @@ const { accountId, providerId, merchantId } = require('./relay-identity');
 const { bindingModel, updateBindingsForEdit } = require('./account-bindings');
 const { defaults: autoDefaults, validateSettings: validateAutoSettings } = require('./auto-switch-policy');
 const { parseTOML, getStaticTOMLValue } = require('toml-eslint-parser');
+const { accountStatus, switchAccountMode, accountMode } = require('./account-mode');
 
 const problem = (message, status = 409) => Object.assign(new Error(message), { status });
 const jsonText = value => `${JSON.stringify(value, null, 2)}\n`;
@@ -111,6 +112,7 @@ class ConfigStore {
     this.statePath = path.join(home, 'relay-ui-state.json');
     this.runtimeDir = path.join(home, 'relay-ui-runtime');
     this.sessionPath = path.join(this.runtimeDir, 'proxy-session.json');
+    this.accountProfilesPath = path.join(this.runtimeDir, 'account-profiles.json');
     this.journalPath = path.join(this.runtimeDir, 'pending-write.json');
     this.write = write;
     this.queue = Promise.resolve();
@@ -166,6 +168,7 @@ class ConfigStore {
       listActionsAvailable: true,
       editAvailable: true,
       accountBindingAvailable: true, accountBindingsRevision: bindings.revision,
+      accountSwitch: await accountStatus(this, current),
       packyBalanceSourceAvailable: true,
       timiccStatusModeAvailable: true,
       aigoStatusModeAvailable: true,
@@ -239,12 +242,23 @@ class ConfigStore {
   async activeEntry() {
     // A request keeps this entry for its entire lifetime, including SSE streams.
     await this.queue;
-    const { state } = await this.read();
-    return this.entry(state.activeName);
+    const current = await this.read();
+    if (accountMode(current.info.text) === 'official' || current.auth.tokens) throw problem('当前为官方账号或 ChatGPT 认证，已暂停第三方代理请求。');
+    return this.entry(current.state.activeName);
+  }
+
+  switchAccountMode(mode) {
+    return this.serialize(() => switchAccountMode(this, mode, inspectConfig, patchBase));
   }
 
   async commit(changes) {
     if (await readText(this.journalPath, true)) throw problem('上次配置写入未完成，已暂停自动写入。请先检查恢复记录。');
+    // Unchanged files are still part of the transaction's read set. A login
+    // can create auth.json between the snapshot and commit even when both
+    // intended values are null, so filtering first would miss that race.
+    for (const change of changes) {
+      if (await readText(change.file, true) !== change.before) throw problem('配置已被其他程序修改，请刷新后重试。');
+    }
     const changed = changes.filter(change => change.before !== change.after);
     if (!changed.length) return;
     await fs.mkdir(this.runtimeDir, { recursive: true, mode: 0o700 });
@@ -257,8 +271,9 @@ class ConfigStore {
     await atomicWrite(this.journalPath, jsonText(record));
     const applied = [];
     try {
-      for (const change of changed) {
+      for (const change of changes) {
         if (await readText(change.file, true) !== change.before) throw problem('配置被其他程序修改，已取消写入。');
+        if (change.before === change.after) continue;
         await this.write(change.file, change.after);
         applied.push(change);
       }
@@ -287,6 +302,7 @@ class ConfigStore {
         return { restartRequired: !current.proxyInstalled, message: (current.proxyInstalled ? `后续代理请求将使用「${entry.name}」。` : `已选择「${entry.name}」，尚未接入 Codex。`) + (current.state.autoSwitch?.enabled ? '手动选择已关闭自动切换。' : '') };
       }
       if (current.proxyInstalled) throw problem('请先切回直接配置，再选择直连中转站。');
+      if (accountMode(current.info.text) === 'official') throw problem('当前是官方账号模式，请先切换到第三方中转模式。');
       const provider = current.info.provider;
       const fixedAuth = Object.keys(provider?.http_headers || {}).some(key => ['authorization', 'api-key', 'x-api-key'].includes(key.toLowerCase()));
       if (provider?.env_key || provider?.experimental_bearer_token || fixedAuth || current.auth.tokens) throw problem('当前认证使用环境变量、固定请求头或 ChatGPT 登录，不能直接替换 API Key。');
@@ -303,6 +319,7 @@ class ConfigStore {
   install(name) {
     return this.serialize(async () => {
       const current = await this.read();
+      if (accountMode(current.info.text) === 'official' || current.auth.tokens) throw problem('当前是官方账号或 ChatGPT 认证，请先切换到第三方中转模式，再接入代理。');
       const { config } = await this.keys();
       const entry = await this.entry(name || current.state.activeName || this.directEntry(config.keys, current)?.name);
       const changes = [{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state, version: 2, activeName: entry.name }) }];

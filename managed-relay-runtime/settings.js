@@ -35,6 +35,20 @@ async function writeSettings(patch, env = process.env) {
   return file;
 }
 
+function normalizeOfficialNetworkMode(value) {
+  return value === 'wifi' ? 'wifi' : 'auto';
+}
+
+async function readOfficialNetworkMode(env = process.env) {
+  return normalizeOfficialNetworkMode((await readSettings(env)).officialNetworkMode);
+}
+
+async function writeOfficialNetworkMode(mode, env = process.env) {
+  if (!['auto', 'wifi'].includes(mode)) throw problem('官方连接方式无效。', 400);
+  await writeSettings({ officialNetworkMode: mode }, env);
+  return mode;
+}
+
 // JSON 提供目录时，页面修改写回同一份配置，避免重启后被旧 codexHome 覆盖。
 // 每次读取最新内容，保留应用路径、注释及未知字段；损坏的文件不能被空配置覆盖。
 async function writeToolConfig(file, patch, { create = false } = {}) {
@@ -107,4 +121,4 @@ async function resolveHome(target) {
   return { home: resolved, created };
 }
 
-module.exports = { settingsPath, readSettings, writeSettings, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath };
+module.exports = { settingsPath, readSettings, writeSettings, normalizeOfficialNetworkMode, readOfficialNetworkMode, writeOfficialNetworkMode, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath };
