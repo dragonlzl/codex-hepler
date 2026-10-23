@@ -11,7 +11,7 @@ class RelayIntelligence {
     this.globalButton = document.querySelector('#global-intelligence-test');
     try {
       const settings = JSON.parse(localStorage.getItem('relay-intelligence-settings') || 'null');
-      if (settings?.model) this.model.value = settings.model;
+      if (settings?.model) this.model.value = settings.model === 'gpt-5.6-sol' ? 'gpt-6.1-sol' : settings.model;
       if (['low', 'medium', 'high', 'xhigh'].includes(settings?.effort)) this.effort.value = settings.effort;
       if (typeof settings?.reviewEnabled === 'boolean') this.reviewEnabled.checked = settings.reviewEnabled;
     } catch {}
