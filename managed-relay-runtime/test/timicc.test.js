@@ -210,7 +210,7 @@ test('per-child display choice persists, migrates on rename and rejects stale or
   const home = await temp(t), alias = { ...keys[0], name: 'timi alias' };
   await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://timicc.com"\n');
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys: [...keys, alias] }));
-  const app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: () => {} });
+  const app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: () => {} });
   t.after(() => app.close());
   const post = async body => {
     const res = await fetch(app.uiUrl + '/api/timicc/status/mode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });

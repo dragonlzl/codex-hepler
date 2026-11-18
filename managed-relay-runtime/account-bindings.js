@@ -1,8 +1,9 @@
 const { createHash } = require('node:crypto');
-const { accountId, merchantId, providerId } = require('./relay-identity');
+const { accountId, merchantId, providerId, KRILL_HOSTS } = require('./relay-identity');
 
 const invalid = () => Object.assign(new Error('账号绑定设置无效，请检查本地绑定配置。'), { status: 409 });
 const isId = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const krillOrigins = new Set(KRILL_HOSTS.flatMap(host => ['http://' + host, 'https://' + host]));
 
 // The binding is an additive overlay: natural identities and original credentials stay intact.
 function bindingModel(keys, state, context = '') {
@@ -22,6 +23,8 @@ function bindingModel(keys, state, context = '') {
     if (['https://rightapi.ai', 'https://www.rightapi.ai'].includes(record.merchant)) record.merchant = 'rightcode';
     if (['https://timicc.com', 'https://www.timicc.com'].includes(record.merchant)) record.merchant = 'timicc';
     if (record.merchant === 'https://api.aigo0.com') record.merchant = 'aigo';
+    // Match only complete official origins saved before the forwarding domain was recognized.
+    if (krillOrigins.has(record.merchant)) record.merchant = 'krill';
     ids.add(record.id);
     for (const id of record.members) {
       if (byNatural.has(id) || natural.get(id)?.some(entry => merchantId(entry.baseurl) !== record.merchant)) throw invalid();

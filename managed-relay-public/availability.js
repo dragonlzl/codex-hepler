@@ -80,7 +80,7 @@ class RelayAvailability {
   start(delay = 15000) {
     clearTimeout(this.timer);
     this.timer = null;
-    if (!document.hidden) this.timer = setTimeout(() => { this.timer = null; return this.refresh(); }, delay);
+    if (!document.hidden && this.getState().availabilityMonitoringEnabled === true) this.timer = setTimeout(() => { this.timer = null; return this.refresh(); }, delay);
   }
 
   cancel() {
@@ -168,26 +168,27 @@ class RelayAvailability {
   }
 
   filterFor(entry) {
-    if (!entry || !this.getState().availabilityAvailable) return null;
+    if (!entry || !this.getState().availabilityAvailable || this.getState().availabilityMonitoringEnabled !== true) return null;
     return RelayAvailability.filterState(this.rows.get(JSON.stringify([entry.name, entry.baseurl])));
   }
 
   sync() {
     const state = this.getState();
-    const signature = JSON.stringify([this.model, this.getView(), state.home, state.accountBindingsRevision, state.availabilityAvailable, state.network?.mode, state.network?.proxyUrl,
+    const signature = JSON.stringify([this.model, this.getView(), state.home, state.accountBindingsRevision, state.availabilityAvailable, state.availabilityMonitoringEnabled, state.network?.mode, state.network?.proxyUrl,
       state.keys.map(entry => [entry.name, entry.baseurl, entry.revision, entry.balanceSource, entry.statusMode]).sort((a, b) => a[0].localeCompare(b[0]))]);
-    this.select.disabled = !state.availabilityAvailable;
+    this.select.disabled = !state.availabilityAvailable || state.availabilityMonitoringEnabled !== true;
     if (signature !== this.signature) {
       this.signature = signature;
       this.reconcileRows(state);
       this.reset();
+      if (state.availabilityMonitoringEnabled !== true) this.rows.clear();
       this.refresh();
     }
     this.paint();
   }
 
   async refresh() {
-    if (this.request || document.hidden || !this.getState().availabilityAvailable) return;
+    if (this.request || document.hidden || !this.getState().availabilityAvailable || this.getState().availabilityMonitoringEnabled !== true) return;
     if (Date.now() < this.retryAt) { this.start(this.retryAt - Date.now()); return; }
     if (this.timer !== undefined) { clearTimeout(this.timer); this.timer = null; }
     const controller = new AbortController();
@@ -203,6 +204,11 @@ class RelayAvailability {
       const data = await response.json();
       if (this.request !== controller || signature !== this.signature || model !== this.model) return;
       if (data.model !== model || !Array.isArray(data.rows)) throw new Error('Invalid status response');
+      if (data.enabled === false) {
+        this.getState().availabilityMonitoringEnabled = false;
+        this.sync();
+        return;
+      }
       this.acceptRows(data.rows);
       this.error = '';
       this.refreshFailures = 0;
@@ -235,6 +241,7 @@ class RelayAvailability {
     for (const target of this.list.querySelectorAll('.provider-availability, .account-availability, .simple-availability')) {
       const status = statusFor(target.dataset.name);
       const html = !state.availabilityAvailable ? '<span class="availability-empty">可用性展示需重启管理服务</span>' :
+        state.availabilityMonitoringEnabled !== true ? '<span class="availability-empty">实时监测已关闭</span>' :
         target.classList.contains('simple-availability') ? this.simpleStatusMarkup(status, target.dataset.name) : this.markup(status, target.dataset.name);
       if (target.innerHTML !== html) {
         const focused = target.contains(document.activeElement);
@@ -261,6 +268,12 @@ class RelayAvailability {
       const authHtml = status?.authorizationSite ? '<button type="button" class="monitor-auth-button" data-site="' + escapeHtml(status.authorizationSite) + '">' + (status.balance?.state === 'auth-required' ? '登录账号' : '账号授权') + '</button>' : '';
       if (auth.innerHTML !== authHtml) auth.innerHTML = authHtml;
       const target = account.querySelector('.account-data');
+      if (state.availabilityMonitoringEnabled !== true) {
+        const html = '<span class="availability-empty">开启实时监测后查询余额与订阅</span>';
+        if (target.dataset.markup !== html) { target.innerHTML = html; target.dataset.markup = html; }
+        target.classList.remove('has-both');
+        continue;
+      }
       const subscription = status?.subscriptions;
       const needsLogin = status?.balance?.state === 'auth-required' && !Number.isFinite(status.balance.amount) && !Array.isArray(subscription?.items);
       const balanceHtml = needsLogin ? '' : this.balanceMarkup(status?.balance);
@@ -278,8 +291,9 @@ class RelayAvailability {
       const status = statusFor(row.dataset.name);
       const balance = row.querySelector('.simple-balance');
       const subscription = row.querySelector('.simple-subscription');
-      const balanceHtml = this.simpleBalanceMarkup(status?.balance, status);
-      const subscriptionHtml = this.simpleSubscriptionMarkup(status?.subscriptions, status);
+      const disabledHtml = '<span class="simple-muted">监测已关闭</span>';
+      const balanceHtml = state.availabilityMonitoringEnabled === true ? this.simpleBalanceMarkup(status?.balance, status) : disabledHtml;
+      const subscriptionHtml = state.availabilityMonitoringEnabled === true ? this.simpleSubscriptionMarkup(status?.subscriptions, status) : disabledHtml;
       if (balance && balance.innerHTML !== balanceHtml) balance.innerHTML = balanceHtml;
       if (subscription && subscription.innerHTML !== subscriptionHtml) subscription.innerHTML = subscriptionHtml;
     }

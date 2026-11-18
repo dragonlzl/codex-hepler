@@ -36,18 +36,39 @@ function setup(accountSwitch) {
     listActionsAvailable: true, editAvailable: true, accountBindingAvailable: true,
   };
   const context = {
-    state, loaded: true, busy: false, networkBusy: false, launchBusy: false, cliCwdInitialized: true,
-    viewMode: 'proxy', search: '', feedback: { phase: 'idle', message: '' }, accountFeedback: { phase: 'idle', message: '' },
+    state, loaded: true, busy: false, networkBusy: false, launchBusy: false, cliCwdInitialized: true, monitoringPending: null,
+    viewMode: 'proxy', search: '', statusFilter: 'all', feedback: { phase: 'idle', message: '' }, accountFeedback: { phase: 'idle', message: '' },
     officialNetworkFeedback: { phase: 'idle', message: '' },
     document: { querySelector: element, querySelectorAll: selector => groups[selector] || [] },
     currentRoute: element('#current-route'), currentRouteName: element('#current-route-name'),
     installButton: element('#install-button'), restoreButton: element('#restore-button'), installFeedback: element('#install-feedback'),
+    monitoringToggle: element('#monitoring-enabled'),
     list: element('#route-list'), listFeedback: element('#list-feedback'), addForm: element('#add-form'), cliCwd: element('#cli-cwd'),
     intelligence: { sync() {} }, renderNetwork() {}, renderHome() {}, renderAppPath() {},
   };
   const ui = vm.runInNewContext(functions + '\n({ renderControls, renderAccountMode, renderLaunch });', context);
   return { ui, state, element, groups };
 }
+
+test('model synchronization follows proxy connection, custom catalog and account mode', () => {
+  const { ui, state, element } = setup({ available: true, mode: 'relay' });
+  state.modelCatalog = { available: true, enabled: false };
+  ui.renderControls();
+  assert.equal(element('#model-sync').disabled, true);
+  state.proxyInstalled = true;
+  state.modelCatalog.enabled = true;
+  ui.renderControls();
+  assert.equal(element('#model-sync').disabled, false);
+  assert.match(element('#model-sync-status').textContent, /已接入模型同步/);
+  state.modelCatalog = { available: false, blockedReason: 'custom catalog' };
+  ui.renderControls();
+  assert.equal(element('#model-sync').disabled, true);
+  assert.equal(element('#model-sync-status').textContent, 'custom catalog');
+  state.accountSwitch.mode = 'official';
+  ui.renderControls();
+  assert.equal(element('#model-sync').disabled, true);
+  assert.match(element('#model-sync-status').textContent, /官方/);
+});
 
 test('official mode enables App and CLI without proxy or relay selection while keeping list management', () => {
   const { ui, state, element, groups } = setup({ available: true, mode: 'official', officialLoggedIn: false, relaySaved: true });

@@ -2,6 +2,9 @@ const state = { mode: 'direct', activeName: null, selectedProxyName: null, proxy
 let viewMode = null;
 let busy = false;
 let loaded = false;
+let statusTimer = null;
+let statusLoading = false;
+let monitoringPending = null;
 let feedback = { phase: 'idle', message: '' };
 let accountFeedback = { phase: 'idle', message: '' };
 let officialNetworkFeedback = { phase: 'idle', message: '' };
@@ -39,6 +42,8 @@ const formMessage = document.querySelector('#form-message');
 const installButton = document.querySelector('#install-button');
 const restoreButton = document.querySelector('#restore-button');
 const installFeedback = document.querySelector('#install-feedback');
+const monitoringToggle = document.querySelector('#monitoring-enabled');
+const monitoringFeedback = document.querySelector('#monitoring-feedback');
 let networkDirty = false;
 let networkBusy = false;
 let draggedName = null;
@@ -373,8 +378,23 @@ function renderControls() {
   renderCurrentRoute();
   renderAccountMode();
   renderOfficialNetwork();
+  monitoringToggle.checked = monitoringPending ?? state.availabilityMonitoringEnabled === true;
+  monitoringToggle.disabled = !loaded || busy || networkBusy || !Object.hasOwn(state, 'availabilityMonitoringEnabled');
+  document.querySelector('#monitoring-status').textContent = !Object.hasOwn(state, 'availabilityMonitoringEnabled')
+    ? '请重启管理服务，以启用实时监测开关。' : state.availabilityMonitoringEnabled === true
+    ? '已开启 · 每 15 秒查询可用状态、余额与订阅；隐藏页面后，已开启的自动切换仍在后台检测。'
+    : '已关闭 · 停止状态与额度自动查询，自动切换暂停；管理状态每 30 秒刷新。';
+  if (state.availabilityMonitoringEnabled !== true && statusFilter !== 'all') statusFilter = 'all';
+  document.querySelectorAll('[data-status-filter]').forEach(button => { button.disabled = state.availabilityMonitoringEnabled !== true && button.dataset.statusFilter !== 'all'; });
   installButton.disabled = officialMode() || busy || !loaded || state.writeBlocked || !state.selectedProxyName;
   restoreButton.disabled = officialMode() || busy || !loaded || state.writeBlocked || !state.proxyInstalled;
+  const modelSyncButton = document.querySelector('#model-sync');
+  modelSyncButton.disabled = officialMode() || busy || networkBusy || !loaded || state.writeBlocked || !state.proxyInstalled || !state.modelCatalog?.available;
+  modelSyncButton.setAttribute('aria-busy', String(busy));
+  document.querySelector('#model-sync-status').textContent = officialMode() ? '官方账号的模型由 Codex 管理。'
+    : state.modelCatalog?.blockedReason || (state.modelCatalog?.enabled
+      ? '已接入模型同步；换站后重新打开 Codex 模型选择器，或点击同步刷新。'
+      : '接入本地代理后，点击同步获取当前中转支持的 Codex 模型；首次同步后需重启 Codex。');
   installButton.hidden = viewMode !== 'proxy';
   installButton.setAttribute('aria-busy', String(busy));
   installButton.textContent = busy ? '正在处理…' : state.proxyInstalled ? '重新接入本地代理' : '接入本地代理';
@@ -550,6 +570,7 @@ function render() {
   renderControls();
   availability.sync();
   automatic.sync();
+  scheduleStatusRefresh();
   if (officialMode()) {
     document.querySelector('#auto-enabled').disabled = true;
     document.querySelector('#auto-status').textContent = '官方 ChatGPT 模式 · 第三方自动切换已暂停';
@@ -571,8 +592,15 @@ function errorMessage(error) {
     : error instanceof TypeError ? '无法连接本地服务，请确认服务仍在运行。' : error.message;
 }
 
+function scheduleStatusRefresh() {
+  clearTimeout(statusTimer);
+  statusTimer = null;
+  if (!document.hidden) statusTimer = setTimeout(load, state.availabilityMonitoringEnabled === true ? 5000 : 30000);
+}
+
 async function load() {
-  if (busy || networkBusy || draggedName) return;
+  if (statusLoading || busy || networkBusy || draggedName) { scheduleStatusRefresh(); return; }
+  statusLoading = true;
   const version = mutationVersion;
   try {
     const current = await api('/api/status');
@@ -590,7 +618,7 @@ async function load() {
     connection.innerHTML = '<span></span>服务异常';
     renderControls();
     showMessage(errorMessage(error));
-  }
+  } finally { statusLoading = false; scheduleStatusRefresh(); }
 }
 
 async function perform(endpoint, payload, localFeedback = false) {
@@ -783,8 +811,24 @@ list.addEventListener('keydown', async event => {
   }
 });
 installButton.addEventListener('click', () => { if (!installButton.disabled && !officialMode()) perform('/api/proxy/install', { name: state.selectedProxyName }, true); });
+document.querySelector('#model-sync').addEventListener('click', event => { if (!event.currentTarget.disabled && !officialMode()) perform('/api/models/sync', {}, true); });
 restoreButton.addEventListener('click', () => { if (!restoreButton.disabled && !officialMode()) perform('/api/proxy/restore', {}, true); });
 document.querySelector('#refresh-status').addEventListener('click', load);
+monitoringToggle.addEventListener('change', async () => {
+  const enabled = monitoringToggle.checked;
+  if (busy || networkBusy || !loaded) return;
+  monitoringPending = enabled;
+  busy = true; mutationVersion++;
+  monitoringFeedback.textContent = enabled ? '正在开启实时监测…' : '正在关闭实时监测…';
+  renderControls();
+  try {
+    const data = await api('/api/availability/settings', { enabled });
+    Object.assign(state, data.status);
+    monitoringFeedback.textContent = data.message;
+    render();
+  } catch (error) { monitoringFeedback.textContent = errorMessage(error); }
+  finally { busy = false; monitoringPending = null; renderControls(); }
+});
 document.querySelector('#add-open').addEventListener('click', () => { addForm.reset(); formMessage.textContent = ''; addDialog.showModal(); });
 document.querySelector('#add-cancel').addEventListener('click', () => { if (!busy) addDialog.close(); });
 addDialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
@@ -920,4 +964,9 @@ appPathForm.addEventListener('submit', async event => {
   } finally { busy = false; renderControls(); }
 });
 load();
-setInterval(() => { if (!document.hidden && loaded) load(); }, 5000);
+document.addEventListener('visibilitychange', () => {
+  clearTimeout(statusTimer); statusTimer = null;
+  if (!document.hidden) load();
+});
+window.addEventListener('pagehide', () => { clearTimeout(statusTimer); statusTimer = null; });
+window.addEventListener('pageshow', event => { if (event.persisted) load(); });

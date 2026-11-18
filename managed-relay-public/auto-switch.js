@@ -20,10 +20,11 @@ class AutoSwitchControls {
   sync() {
     const state = this.getState(), settings = state.autoSwitchSettings, runtime = state.autoSwitch;
     this.toggle.checked = this.pendingEnabled ?? settings?.enabled === true;
-    this.toggle.disabled = this.busy || !settings || (!settings.enabled && (!state.proxyInstalled || !settings.pool.length));
+    this.toggle.disabled = this.busy || !settings || (!settings.enabled && (!state.proxyInstalled || !settings.pool.length || state.availabilityMonitoringEnabled !== true));
     this.openButton.disabled = this.busy || !settings;
     document.querySelector('#auto-status').textContent = !settings ? '正在读取设置…' : !settings.enabled ?
-      (!state.proxyInstalled ? '已关闭 · 接入本地代理后可开启' : !settings.pool.length ? '已关闭 · 请先设置优先级池' : `已关闭 · 池中 ${settings.pool.length} 个入口`) :
+      (state.availabilityMonitoringEnabled !== true ? '已关闭 · 请先开启实时可用性监测' : !state.proxyInstalled ? '已关闭 · 接入本地代理后可开启' : !settings.pool.length ? '已关闭 · 请先设置优先级池' : `已关闭 · 池中 ${settings.pool.length} 个入口`) :
+      state.availabilityMonitoringEnabled !== true ? '实时监测已关闭，自动切换已暂停（保留配置）' :
       (runtime?.message || '等待后台检测');
     const last = runtime?.lastSwitch;
     document.querySelector('#auto-last-switch').textContent = last ?
@@ -67,7 +68,7 @@ class AutoSwitchControls {
       this.form.elements.subscriptionMinimum.value = data.settings.subscriptionMinimum;
       this.form.elements.balanceMinimum.value = data.settings.balanceMinimum;
       this.renderPool(data);
-      this.formFeedback.textContent = '';
+      this.formFeedback.textContent = this.getState().availabilityMonitoringEnabled === true ? '' : '实时监测已关闭，暂不查询订阅列表；已保存的关联仍会保留。';
     } catch (error) { this.formFeedback.textContent = error.message; this.revision = null; }
     finally {
       this.busy = false;

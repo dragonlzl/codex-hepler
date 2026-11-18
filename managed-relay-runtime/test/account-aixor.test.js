@@ -185,7 +185,7 @@ test('local Aixor API returns only normalized wallet fields, retains prior auth 
   const home = await homeFor(t), logs = [];
   await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://aixor.cc"\n');
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys }));
-  const app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: entry => logs.push(entry) });
+  const app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: entry => logs.push(entry) });
   t.after(() => app.close());
   const post = (endpoint, payload, origin = app.uiUrl) => fetch(app.uiUrl + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ name: keys[0].name, ...payload }) });
   assert.equal((await post('/api/availability/login', credentials, 'https://aixor.cc')).status, 403);

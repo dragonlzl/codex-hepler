@@ -144,7 +144,7 @@ test('local server queries saved Packycode keys only, protects settings and refr
   const home = await homeFor(t), logs = [], calls = [];
   await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://cf.api.fan/v1"\n');
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys: [entry(), entry('Duplicate'), { name: 'Other', value: 'sk-other', baseurl: 'https://example.com' }] }));
-  const app = await start({ home, uiPort: 0, proxyPort: 0, log: value => logs.push(value), availabilityOptions: { request: async url => ({ success: true, data: { model_name: new URL(url).searchParams.get('model'), groups: [] } }),
+  const app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, log: value => logs.push(value), availabilityOptions: { request: async url => ({ success: true, data: { model_name: new URL(url).searchParams.get('model'), groups: [] } }),
     packyBalanceOptions: { request: async (url, { apiKey }) => { calls.push({ url, apiKey }); const result = payload(); result.data.name = KEY; return result; }, wait: async () => {} } } });
   t.after(() => app.close());
   const post = (url, data, origin = app.uiUrl) => fetch(app.uiUrl + url, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(data) });

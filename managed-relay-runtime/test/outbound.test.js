@@ -107,6 +107,28 @@ test('manual settings persist separately; reject own ports; do not silently use 
   assert.equal((await o.resolve('https://upstream.invalid')).source, 'direct');
 });
 
+test('Krill account connections reuse a private direct agent without changing other routes or proxy settings', async t => {
+  const o = new Outbound(await temp(t), { readSystem: async () => ({}), readFlyingBird: async () => null, envProxy: () => '' });
+  const route = await o.resolve('https://www.krill-code.com/api/auth/me');
+  assert.equal(route.source, 'direct');
+  const agent = o.accountAgent('https://www.krill-code.com/api/auth/me', route);
+  assert.equal(agent, o.accountAgent('https://www.krill-code.com/api/auth/login', route));
+  assert.equal(agent.keepAlive, true);
+  assert.equal(agent.maxSockets, 1);
+  assert.notEqual(agent.options.rejectUnauthorized, false);
+  assert.equal(o.accountAgent('https://api.kbsfdxc.com/v1', route), null);
+  assert.equal(o.accountAgent('https://www.krill-code.com.evil.example/api/auth/me', route), null);
+  assert.equal(o.accountAgent('https://www.krill-code.com/api/auth/me', { proxyUrl: 'http://127.0.0.1:7890' }), null);
+  assert.equal(o.agent(route), false);
+  let destroyed = false;
+  const original = agent.destroy.bind(agent);
+  agent.destroy = () => { destroyed = true; original(); };
+  o.close();
+  assert.equal(destroyed, true);
+  assert.equal(o.krillAccountAgent, null);
+  assert.throws(() => o.accountAgent('https://www.krill-code.com/api/auth/me', route), /closed/);
+});
+
 test('environment proxy and system exclusions are respected without leaking credentials', async t => {
   const o = new Outbound(await temp(t), { readSystem: async () => ({}), readFlyingBird: async () => null, envProxy: url => url.includes('bypass.invalid') ? '' : 'http://user:password@127.0.0.1:9999' });
   t.after(() => o.close());

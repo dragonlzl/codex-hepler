@@ -6,6 +6,7 @@ const { bindingModel, updateBindingsForEdit } = require('./account-bindings');
 const { defaults: autoDefaults, validateSettings: validateAutoSettings } = require('./auto-switch-policy');
 const { parseTOML, getStaticTOMLValue } = require('toml-eslint-parser');
 const { accountStatus, switchAccountMode, accountMode } = require('./account-mode');
+const { catalogUrl, catalogStatus, managedCatalog, routeKey } = require('./codex-model-catalog');
 
 const problem = (message, status = 409) => Object.assign(new Error(message), { status });
 const jsonText = value => `${JSON.stringify(value, null, 2)}\n`;
@@ -37,12 +38,14 @@ function inspectConfig(text) {
   const id = profile?.model_provider || config.model_provider || 'openai';
   const provider = config.model_providers?.[id];
   const values = new Map();
+  const statements = new Map();
   function visit(node, prefix = []) {
     if (node.type === 'TOMLTable') {
       for (const child of node.body) visit(child, node.resolvedKey);
     } else if (node.type === 'TOMLKeyValue') {
       const keys = [...prefix, ...node.key.keys.map(key => key.type === 'TOMLBare' ? key.name : key.value)];
       values.set(JSON.stringify(keys), node.value);
+      statements.set(JSON.stringify(keys), { node, prefix });
       if (node.value.type === 'TOMLInlineTable') for (const child of node.value.body) visit(child, keys);
     } else if (node.body) {
       for (const child of node.body) visit(child, prefix);
@@ -50,15 +53,58 @@ function inspectConfig(text) {
   }
   visit(ast);
   const baseNode = values.get(JSON.stringify(['model_providers', id, 'base_url']));
-  return { id, provider, baseUrl: provider?.base_url || null, baseNode, text };
+  return { id, provider, config, baseUrl: provider?.base_url || null, baseNode, text, values, statements };
 }
 
-function patchBase(info, url, rawValue = JSON.stringify(url)) {
+function patchCatalog(info, value) {
+  const key = JSON.stringify(['model_providers', info.id, 'model_catalog_url']);
+  const node = info.values.get(key);
+  let text;
+  if (node) {
+    let [start, end] = value === null ? info.statements.get(key).node.range : node.range;
+    const inline = info.values.get(JSON.stringify(['model_providers', info.id]));
+    if (value === null && inline?.type === 'TOMLInlineTable') {
+      const comma = info.text.lastIndexOf(',', start);
+      if (comma > inline.range[0]) start = comma;
+      else end += /^\s*,/.exec(info.text.slice(end))?.[0].length || 0;
+    } else if (value === null) {
+      const lineStart = info.text.lastIndexOf('\n', start - 1) + 1;
+      const nextLine = info.text.indexOf('\n', end);
+      const lineEnd = nextLine < 0 ? info.text.length : nextLine;
+      if (/^\s*$/.test(info.text.slice(lineStart, start)) && /^\s*$/.test(info.text.slice(end, lineEnd))) {
+        start = lineStart;
+        end = nextLine < 0 ? lineEnd : nextLine + 1;
+      }
+    }
+    text = info.text.slice(0, start) + (value === null ? '' : JSON.stringify(value)) + info.text.slice(end);
+  } else if (value === null) return info.text;
+  else {
+    const inline = info.values.get(JSON.stringify(['model_providers', info.id]));
+    if (inline?.type === 'TOMLInlineTable') {
+      const position = inline.range[1] - 1;
+      text = info.text.slice(0, position) + `, model_catalog_url = ${JSON.stringify(value)}` + info.text.slice(position);
+    } else {
+      const statement = info.statements.get(JSON.stringify(['model_providers', info.id, 'base_url']));
+      if (!statement) throw problem('当前 provider 缺少可编辑的 base_url。');
+      const newline = info.text.includes('\r\n') ? '\r\n' : '\n';
+      const lineEnd = info.text.indexOf('\n', statement.node.range[1]);
+      const position = lineEnd < 0 ? info.text.length : lineEnd + 1;
+      const field = ['model_providers', info.id, 'model_catalog_url'].slice(statement.prefix.length).map(part => JSON.stringify(part)).join('.');
+      text = info.text.slice(0, position) + (lineEnd < 0 ? newline : '') + `${field} = ${JSON.stringify(value)}${newline}` + info.text.slice(position);
+    }
+  }
+  const next = inspectConfig(text);
+  if (next.id !== info.id || (next.provider?.model_catalog_url ?? null) !== value) throw problem('模型目录配置校验失败，未进行修改。');
+  return text;
+}
+
+function patchBase(info, url, rawValue = JSON.stringify(url), retargetCatalog = false) {
   if (!info.baseNode || typeof info.baseUrl !== 'string') throw problem('当前 provider 没有可编辑的 base_url。请先配置一个中转 provider。');
   const [start, end] = info.baseNode.range;
-  const text = info.text.slice(0, start) + rawValue + info.text.slice(end);
+  let text = info.text.slice(0, start) + rawValue + info.text.slice(end);
   const next = inspectConfig(text);
   if (next.id !== info.id || next.baseUrl !== url) throw problem('配置校验失败，未进行修改。');
+  if (managedCatalog(info)) text = patchCatalog(next, retargetCatalog ? catalogUrl(url) : null);
   return text;
 }
 
@@ -163,6 +209,7 @@ class ConfigStore {
       proxyInstalled: current.proxyInstalled, proxyUrl: this.proxyUrl,
       providerId: current.info.id, providerName: current.info.provider?.name || current.info.id,
       configuredBaseUrl: current.info.baseUrl,
+      modelCatalog: catalogStatus(current.info, this.proxyUrl),
       canRestore: !!(current.proxyInstalled && session?.version === 1 && session.providerId === current.info.id),
       writeBlocked: (await readText(this.journalPath, true)) !== null,
       listActionsAvailable: true,
@@ -323,17 +370,53 @@ class ConfigStore {
       const { config } = await this.keys();
       const entry = await this.entry(name || current.state.activeName || this.directEntry(config.keys, current)?.name);
       const changes = [{ file: this.statePath, before: current.stateText, after: jsonText({ ...current.state, version: 2, activeName: entry.name }) }];
+      let updated = current.proxyInstalled ? current.info.text : patchBase(current.info, this.proxyUrl);
+      const connected = inspectConfig(updated);
+      if (catalogStatus(connected, this.proxyUrl).available) updated = patchCatalog(connected, catalogUrl(this.proxyUrl));
       if (!current.proxyInstalled) {
-        const updated = patchBase(current.info, this.proxyUrl);
         const [start, end] = current.info.baseNode.range;
         const session = { version: 1, providerId: current.info.id, baseUrl: current.info.baseUrl, rawBaseValue: current.info.text.slice(start, end), configBefore: current.info.text, configApplied: updated };
         changes.unshift(
           { file: this.sessionPath, before: await readText(this.sessionPath, true), after: jsonText(session) },
           { file: this.configPath, before: current.info.text, after: updated },
         );
+      } else if (updated !== current.info.text) {
+        changes.push(...await this.catalogChanges(current, updated));
       }
       await this.commit(changes);
-      return { restartRequired: true, message: '代理配置已写入，原 provider 身份和认证保持不变。请完整重启一次 Codex。' };
+      return { restartRequired: true, message: '代理配置已写入，原 provider 身份和认证保持不变。' + (catalogStatus(inspectConfig(updated), this.proxyUrl).enabled ? '已接入 Codex 模型目录同步。' : '') + '请完整重启一次 Codex。' };
+    });
+  }
+
+  async catalogChanges(current, updated) {
+    const changes = [{ file: this.configPath, before: current.info.text, after: updated }];
+    const raw = await readText(this.sessionPath, true);
+    if (raw) {
+      const session = JSON.parse(raw);
+      if (session.version === 1 && session.providerId === current.info.id && session.configApplied === current.info.text) {
+        changes.push({ file: this.sessionPath, before: raw, after: jsonText({ ...session, configApplied: updated }) });
+      }
+    }
+    return changes;
+  }
+
+  enableModelCatalog(expectedKey) {
+    return this.serialize(async () => {
+      const current = await this.read();
+      if (!current.proxyInstalled || accountMode(current.info.text) === 'official' || current.auth.tokens) throw problem('请先接入第三方本地代理，再同步 Codex 模型。');
+      const status = catalogStatus(current.info, this.proxyUrl);
+      if (status.blockedReason) throw problem(status.blockedReason);
+      const { raw: keysText, config } = await this.keys();
+      const entry = this.validateRoute(config.keys.find(item => item.name === current.state.activeName));
+      if (expectedKey && routeKey(entry) !== expectedKey) throw problem('中转配置已切换，请重新同步 Codex 模型。');
+      const updated = patchCatalog(current.info, catalogUrl(this.proxyUrl));
+      await this.commit([
+        ...await this.catalogChanges(current, updated),
+        { file: this.authPath, before: current.authText, after: current.authText },
+        { file: this.statePath, before: current.stateText, after: current.stateText },
+        { file: this.keysPath, before: keysText, after: keysText },
+      ]);
+      return { restartRequired: updated !== current.info.text };
     });
   }
 
@@ -576,4 +659,4 @@ class ConfigStore {
   }
 }
 
-module.exports = { ConfigStore, inspectConfig, patchBase, validateEntry, orderedKeys, atomicWrite, sameUrl, problem };
+module.exports = { ConfigStore, inspectConfig, patchBase, patchCatalog, validateEntry, orderedKeys, atomicWrite, sameUrl, problem };

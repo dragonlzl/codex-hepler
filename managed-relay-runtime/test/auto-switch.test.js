@@ -148,6 +148,33 @@ async function fixture(t) {
     setRequest: value => { request = value; }, calls: () => calls };
 }
 
+test('monitoring pause cancels a queued route selection and resumes with a fresh detection cycle', async t => {
+  const f = await fixture(t);
+  f.setRows([row('A', epoch, 'unavailable'), row('B'), row('C')]);
+  let release, ready;
+  const gate = new Promise(resolve => { release = resolve; });
+  const selecting = new Promise(resolve => { ready = resolve; });
+  const select = f.store.selectAutomatic.bind(f.store);
+  t.mock.method(f.store, 'selectAutomatic', async (...args) => { ready(); await gate; return select(...args); });
+  const pending = f.auto.tick();
+  await selecting;
+  f.monitor.monitoringEnabled = false;
+  f.auto.monitoringChanged();
+  release();
+  await pending;
+  assert.equal((await f.store.activeEntry()).name, 'A');
+  assert.equal(f.auto.snapshot().phase, 'paused');
+  assert.equal(f.auto.timer, null);
+  assert.equal(f.events.length, 0);
+  f.monitor.monitoringEnabled = true;
+  f.auto.monitoringChanged();
+  await f.auto.tick();
+  assert.equal((await f.store.activeEntry()).name, 'B');
+  assert.equal(f.auto.snapshot().phase, 'active');
+  assert.ok(f.auto.timer);
+  assert.equal(f.events.length, 1);
+});
+
 test('current red switches immediately, all failed keeps last route and recovery preempts', async t => {
   const f = await fixture(t);
   f.setRows([row('A', epoch, 'unavailable'), row('B'), row('C')]);
@@ -425,7 +452,7 @@ test('failed settings writes roll back and stale settings cannot overwrite anoth
 test('API exposes switch config; disabled startup does not run account probes and enabled timer works without a browser', async t => {
   const f = await fixture(t); await f.store.toggleAutoSwitch(false);
   let calls = 0;
-  const app = await start({ home: f.home, uiPort: 0, proxyPort: 0, log: () => {}, autoSwitchOptions: { intervalMs: 10 },
+  const app = await start({ monitoringEnabled: true, home: f.home, uiPort: 0, proxyPort: 0, log: () => {}, autoSwitchOptions: { intervalMs: 10 },
     availabilityOptions: { request: async () => { calls++; throw new Error('fixture has no login'); } },
     launcher: { snapshot: async () => ({}) } });
   t.after(() => app.close());

@@ -117,7 +117,7 @@ test('local RC endpoints isolate accounts, validate manual tokens and never retu
   const home = await temp(t), logs = [];
   await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://www.rightapi.ai/v1"\n');
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys }));
-  const app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: record => logs.push(record) }); t.after(() => app.close());
+  const app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: record => logs.push(record) }); t.after(() => app.close());
   const post = async (endpoint, payload, origin = app.uiUrl) => {
     const r = await fetch(app.uiUrl + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ name: 'RC', site: 'rightcode', ...payload }) });
     return { status: r.status, data: await r.json() };

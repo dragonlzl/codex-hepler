@@ -131,6 +131,12 @@ test('refresh failures expose classified causes, record safe diagnostics and cle
       assert.equal(events.at(-1).errorCode, code);
       assert.ok(!JSON.stringify([row, events]).includes('private-token'));
     }
+    failure = Object.assign(new Error('private TLS alert internal error80'), { cause: { code: 'EPROTO' } }); now += REFRESH_MS;
+    row = (await monitor.snapshot(keys)).rows[0];
+    assert.equal(row.failure.code, 'EPROTO');
+    assert.match(row.failure.message, /TLS 握手失败.*Wi-Fi 已提供 VPN.*直连.*EPROTO/);
+    assert.equal(events.at(-1).errorCode, 'EPROTO');
+    assert.ok(!JSON.stringify([row, events]).includes('private TLS alert internal error80'));
     failure = null; now += REFRESH_MS;
     row = (await monitor.snapshot(keys)).rows[0];
     assert.equal(row.state, 'available'); assert.equal(row.failure, undefined);
@@ -231,7 +237,7 @@ test('HTTP API validates models, returns no credentials and leaves Codex config 
   const { MonitorAuth } = require('../monitor-auth');
   const { accountId } = require('../relay-identity');
   for (const key of keys.slice(0, 2)) await new MonitorAuth(home, 'input', accountId(key)).save(fixture.TOKEN);
-  const app = await start({ home, proxyPort: 0, uiPort: 0, availabilityOptions: { clock: () => NOW, request: async (url, options) => url === input.ENDPOINT ? payload() : fixture.request(url, options) }, log: () => {} });
+  const app = await start({ monitoringEnabled: true, home, proxyPort: 0, uiPort: 0, availabilityOptions: { clock: () => NOW, request: async (url, options) => url === input.ENDPOINT ? payload() : fixture.request(url, options) }, log: () => {} });
   t.after(() => app.close());
   const status = await (await fetch(app.uiUrl + '/api/status')).json();
   assert.equal(status.availabilityAvailable, true);

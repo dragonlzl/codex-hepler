@@ -5,7 +5,11 @@ const { Availability, MODELS, REFRESH_MS, adapterFor } = require('../availabilit
 const NOW = Date.parse('2026-09-17T02:20:00Z');
 const stamp = at => new Date(at).toISOString().slice(0, 19).replace('T', ' ');
 const sample = (ago, s) => ({ ts: stamp(NOW - ago * 60000), s });
-const keys = ['https://api-slb.krill-code.net/codex/v1', 'https://api.cdn-krill-ai.com/coding/v1', 'https://api.cdn-krill-ai.com/codex/v1'].map((baseurl, i) => ({ name: 'Krill ' + i, baseurl, value: 'sk-private' }));
+const keys = [
+  'https://api-slb.krill-code.net/codex/v1', 'https://api.cdn-krill-ai.com/coding/v1', 'https://api.cdn-krill-ai.com/codex/v1',
+  'https://api.krill-code.net/codex/v1', 'https://api-slb.kbsfdxc.net/v1', 'https://api.kbsfdxc.com/v1',
+  'https://api.kbsfdxc.net/codex/v1', 'https://api.kbsfdxc.com/coding/v1',
+].map((baseurl, i) => ({ name: 'Krill ' + i, baseurl, value: 'sk-private' }));
 function payload() {
   return { success: true, data: {
     channels: MODELS.map((model, i) => ({ channel_key: 'channel-' + i, model_name: model, channel: 'OpenAI 官渠',
@@ -15,10 +19,13 @@ function payload() {
   } };
 }
 
-test('Krill recognizes the saved monthly and weekly endpoints with strict hostname matching', () => {
+test('Krill recognizes current and legacy monthly and weekly endpoints with strict hostname matching', () => {
   for (const entry of keys) assert.equal(adapterFor(entry.baseurl).id, 'krill');
   assert.equal(adapterFor('https://www.krill-code.com').id, 'krill');
   assert.equal(adapterFor('https://api.cdn-krill-ai.com.evil.example/v1'), null);
+  assert.equal(adapterFor('https://api.kbsfdxc.com.evil.example/v1'), null);
+  assert.equal(adapterFor('https://api-slb.kbsfdxc.net.evil.example/v1'), null);
+  assert.equal(adapterFor('https://other.kbsfdxc.net/v1'), null);
   assert.equal(adapterFor('https://other.krill-code.net'), null);
 });
 
@@ -91,6 +98,11 @@ test('one public request serves both models and all Krill routes, with stale his
   assert.equal(astra.rows[0].state, 'available');
   assert.equal(sol.rows[0].state, 'degraded');
   assert.deepEqual(astra.rows[0].history, astra.rows[2].history);
+  for (const row of astra.rows) {
+    assert.equal(row.state, 'available');
+    assert.deepEqual(row.history, astra.rows[0].history);
+    assert.equal(row.authorizationSite, 'krill');
+  }
   assert.equal(astra.rows[0].source.url, 'https://www.krill-code.com/status');
   assert.ok(!JSON.stringify(astra).includes('sk-private'));
   now += REFRESH_MS; fail = true;

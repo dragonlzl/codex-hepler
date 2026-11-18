@@ -49,6 +49,16 @@ async function writeOfficialNetworkMode(mode, env = process.env) {
   return mode;
 }
 
+async function readAvailabilityMonitoring(env = process.env) {
+  return (await readSettings(env)).availabilityMonitoringEnabled === true;
+}
+
+async function writeAvailabilityMonitoring(enabled, env = process.env) {
+  if (typeof enabled !== 'boolean') throw problem('实时监测开关无效。', 400);
+  await writeSettings({ availabilityMonitoringEnabled: enabled }, env);
+  return enabled;
+}
+
 // JSON 提供目录时，页面修改写回同一份配置，避免重启后被旧 codexHome 覆盖。
 // 每次读取最新内容，保留应用路径、注释及未知字段；损坏的文件不能被空配置覆盖。
 async function writeToolConfig(file, patch, { create = false } = {}) {
@@ -121,4 +131,4 @@ async function resolveHome(target) {
   return { home: resolved, created };
 }
 
-module.exports = { settingsPath, readSettings, writeSettings, normalizeOfficialNetworkMode, readOfficialNetworkMode, writeOfficialNetworkMode, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath };
+module.exports = { settingsPath, readSettings, writeSettings, normalizeOfficialNetworkMode, readOfficialNetworkMode, writeOfficialNetworkMode, readAvailabilityMonitoring, writeAvailabilityMonitoring, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath };

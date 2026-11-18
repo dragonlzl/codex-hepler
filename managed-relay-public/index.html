@@ -28,6 +28,10 @@
             <div class="page-heading"><div><p class="kicker">YOUR RELAY WORKSPACE</p><h1 id="routes-title">中转站</h1><p>管理线路、查看状态，找到合适的请求入口。</p></div><button id="add-open" class="primary" type="button"><span aria-hidden="true">＋</span> 新增中转</button></div>
             <section id="current-route" class="current-route" aria-label="当前使用"><span class="current-dot" aria-hidden="true"></span><span class="current-route-label">当前使用</span><button id="current-route-name" type="button" disabled>正在读取…</button><span id="current-route-mode" class="mode-tag"></span><a href="#connection" class="text-link">账号与连接 ↗</a></section>
             <p id="current-network" class="current-network" role="status" aria-live="polite" hidden></p>
+            <section class="auto-panel monitoring-panel" aria-labelledby="monitoring-title">
+              <div class="auto-heading"><div><h2 id="monitoring-title">实时可用性监测</h2><p id="monitoring-status">默认关闭以减少耗电；开启后每 15 秒查询可用状态、余额与订阅。</p></div><label class="auto-toggle"><input id="monitoring-enabled" type="checkbox" role="switch" aria-describedby="monitoring-status" disabled /><span>开启实时监测</span></label></div>
+              <p id="monitoring-feedback" class="auto-help" role="status" aria-live="polite"></p>
+            </section>
             <div class="route-controls">
             <section class="auto-panel" aria-labelledby="auto-title">
               <div class="auto-heading"><div><h2 id="auto-title">自动切换</h2><p>中转商优先 · 先绿色，再优先级 · 确认不可用立即换站，查询异常保留当前</p></div><label class="auto-toggle"><input id="auto-enabled" type="checkbox" role="switch" disabled /><span>开启自动切换</span></label></div>
@@ -57,7 +61,7 @@
 
 
               <section id="simple-route-view" class="simple-route-view" role="tabpanel" aria-labelledby="simple-route-tab">
-                <p class="simple-list-help">每个账号 / API Key 独立一行 · 检测跟随 API Key · 状态每 15 秒更新</p>
+                <p class="simple-list-help">每个账号 / API Key 独立一行 · 检测跟随 API Key · 开启实时监测后每 15 秒更新</p>
                 <div class="simple-list-scroll" role="table" aria-label="简洁中转列表" tabindex="0">
                   <div class="simple-list-head" role="row"><span role="columnheader">中转别名</span><span role="columnheader">可用状态监测</span><span role="columnheader">余额</span><span role="columnheader">订阅</span><span role="columnheader">智力状态</span><span role="columnheader">智力测试</span><span role="columnheader">切换</span></div>
                   <div id="simple-route-list" class="simple-route-list" role="rowgroup"></div>
@@ -79,7 +83,7 @@
                 <p class="intelligence-help">点击中转旁的「智力测试」开始。每次均为全新对话，会消耗该中转的模型额度；相同参数便于比较。截图为 1280 × 800，打开结果可查看动画。需要本机安装 Chrome。</p>
               </details>
 
-              <div class="list-help"><span>按中转商归组 · 拖动手柄排序</span><span>状态每 15 秒更新</span></div>
+              <div class="list-help"><span>按中转商归组 · 拖动手柄排序</span><span>开启实时监测后每 15 秒更新</span></div>
               <div class="availability-filters" role="group" aria-label="按当前可用性筛选" aria-describedby="availability-filter-help">
                 <button type="button" data-status-filter="all" aria-pressed="true">全部 <span data-filter-count="all">0</span></button>
                 <button type="button" data-status-filter="available" aria-pressed="false">当前可用 <span data-filter-count="available">0</span></button>
@@ -118,7 +122,8 @@
         <section class="mode-panel"><div class="mode-copy"><p class="kicker">RELAY ROUTING</p><h3>第三方中转运行方式</h3><p id="mode-description">—</p></div><div class="mode-actions"><button class="mode-button" data-mode="direct"><strong>直接配置</strong><small>切换后需重启 Codex</small></button><button class="mode-button" data-mode="proxy"><strong>本地代理</strong><small>切换后无需重启 Codex</small></button></div></section>
         <section id="install-panel" class="install-panel">
           <div><p class="kicker">CODEX CONNECTION</p><h3>接入 Codex 本地代理</h3><p>选择本地代理并接入后，换站无需重启。首次接入或恢复直连后，需重启一次 Codex。</p></div>
-          <div class="connection-actions"><button id="install-button" class="secondary" type="button" aria-describedby="install-feedback">接入本地代理</button><button id="restore-button" class="secondary" type="button">恢复接入前的直连配置</button></div>
+          <div class="connection-actions"><button id="install-button" class="secondary" type="button" aria-describedby="install-feedback">接入本地代理</button><button id="model-sync" class="secondary" type="button" aria-describedby="model-sync-status install-feedback" disabled>同步 Codex 模型</button><button id="restore-button" class="secondary" type="button">恢复接入前的直连配置</button></div>
+          <p id="model-sync-status" class="install-feedback">接入本地代理后，可同步当前中转支持的 Codex 模型。</p>
           <p id="install-feedback" class="install-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
         </section>
         <section class="request-status"><p id="last-request" role="status">尚未读取请求状态。</p><button id="refresh-status" type="button" title="刷新状态" aria-label="刷新状态">↻</button></section>

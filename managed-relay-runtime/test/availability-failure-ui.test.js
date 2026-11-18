@@ -10,7 +10,7 @@ function view(fetch) {
     document: { hidden: false }, clearTimeout, setTimeout,
     escapeHtml: value => String(value).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';') });
   return Object.assign(Object.create(View.prototype), { model: 'gpt-6-astra', error: '', rows: new Map(), signature: 'current',
-    rowFailures: new Map(), request: null, getState: () => ({ availabilityAvailable: true }), isDragging: () => false, paint: () => {} });
+    rowFailures: new Map(), request: null, getState: () => ({ availabilityAvailable: true, availabilityMonitoringEnabled: true }), isDragging: () => false, paint: () => {} });
 }
 
 test('a local refresh failure is distinguished from provider errors and keeps prior rows', async () => {

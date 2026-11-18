@@ -60,7 +60,7 @@ test('browser login HTTP flow saves only the account token and supports safe pol
   await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://api.aigo0.com/v1"\n');
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys: [key] }));
   let token = fixture.TOKEN, closed = 0;
-  const app = await start({ home, uiPort: 0, proxyPort: 0, log: () => {}, availabilityOptions: { request: fixture.request,
+  const app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, log: () => {}, availabilityOptions: { request: fixture.request,
     browserLoginOptions: { interval: 5, launch: async () => ({ readToken: async () => token,
       frame: async () => ({ width: 760, height: 780, image: 'YWlnbw==', mimeType: 'image/jpeg' }),
       input: async event => { assert.equal(event.type, 'text'); return { accepted: true }; }, close: async () => { closed++; } }) } } });

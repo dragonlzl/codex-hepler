@@ -191,7 +191,7 @@ async function switchAccountMode(store, mode, inspectConfig, patchBase) {
     if (!sameUrl(info.baseUrl, target.proxyUrl) || !target.sessionText) throw fail('代理地址备份不完整，无法安全恢复到当前端口。');
     const session = JSON.parse(target.sessionText);
     if (session.providerId !== info.id || session.configApplied !== target.configText) throw fail('代理恢复记录与中转备份不匹配，请检查备份后重试。');
-    target = { ...target, configText: patchBase(info, store.proxyUrl), proxyUrl: store.proxyUrl };
+    target = { ...target, configText: patchBase(info, store.proxyUrl, undefined, true), proxyUrl: store.proxyUrl };
     target.sessionText = jsonText({ ...session, configApplied: target.configText });
   }
   profiles[mode] = target;

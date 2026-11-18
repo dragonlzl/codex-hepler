@@ -131,6 +131,15 @@ class PackyBalance {
     this.generation = 0;
     this.closed = false;
     this.allowedNames = null;
+    this.monitoringEnabled = true;
+  }
+
+  setMonitoringEnabled(enabled) {
+    if (this.monitoringEnabled === enabled) return;
+    this.monitoringEnabled = enabled;
+    this.generation++;
+    for (const cached of this.cache.values()) cached.controller?.abort();
+    this.cache.clear();
   }
 
   settings() {
@@ -160,6 +169,7 @@ class PackyBalance {
 
   async read(name, { force = false, baseurl } = {}) {
     this.controller.signal.throwIfAborted();
+    if (!this.monitoringEnabled && !force) return { kind: 'packy-key', state: 'disabled', refreshing: false, fetchedAt: null };
     const generation = this.generation;
     const [entry, config] = await Promise.all([this.getEntry(name), this.settings()]);
     this.controller.signal.throwIfAborted();

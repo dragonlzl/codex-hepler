@@ -202,7 +202,7 @@ test('local authorization API validates before saving, rejects cross-origin requ
   await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://blackaicoding.com"\n');
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys: keys.slice(0, 2) }));
   let reject = true;
-  const app = await start({ home, proxyPort: 0, uiPort: 0, availabilityOptions: { clock: () => NOW, request: async () => {
+  const app = await start({ monitoringEnabled: true, home, proxyPort: 0, uiPort: 0, availabilityOptions: { clock: () => NOW, request: async () => {
     if (reject) throw Object.assign(new Error('unauthorized'), { status: 401 });
     return fixture();
   } }, log: () => {} });

@@ -126,7 +126,7 @@ test('INPUT account mappings refresh, unknown or failed mappings never reuse the
 
 test('INPUT HTTP mode changes persist independently, reject conflicts and survive rename', async t => {
   const { home } = await setup(t);
-  const app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: () => {} });
+  const app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: () => {} });
   t.after(() => app.close());
   const post = payload => fetch(app.uiUrl + '/api/input/status/mode', { method: 'POST', headers: { origin: app.uiUrl, 'content-type': 'application/json' }, body: JSON.stringify(payload) });
   const status = await app.store.status(), entry = status.keys[0];

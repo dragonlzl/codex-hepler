@@ -1,6 +1,6 @@
 const https = require('node:https');
 const fs = require('node:fs/promises');
-const { providerId, accountId: naturalAccountId } = require('./relay-identity');
+const { providerId, accountId: naturalAccountId, KRILL_HOSTS } = require('./relay-identity');
 const { problem } = require('./config-store');
 const { networkAccessError } = require('./network-error');
 const { readBlackaicodingStatus, MONITOR_URL, ENDPOINT: BLACKAICODING_ENDPOINT } = require('./availability-blackaicoding');
@@ -9,6 +9,7 @@ const { MonitorAuth, validateSiteToken } = require('./monitor-auth');
 const { MonitorLogin } = require('./monitor-login');
 const { AixorLogin } = require('./login-aixor');
 const { KrillLogin } = require('./login-krill');
+const { krillRequest } = require('./krill-transport');
 const { RightcodeLogin } = require('./login-rightcode');
 const rightcode = require('./account-rightcode');
 const rightcodeStatus = require('./availability-rightcode');
@@ -87,7 +88,7 @@ const ADAPTERS = Object.freeze([{
   balance: { endpoint: packy.BALANCE_ENDPOINT, parse: packy.readBalance, requiresAuthorization: true, dependencies: ['settings'] },
   verifyAuthorization: { endpoint: packy.BALANCE_ENDPOINT, parse: packy.readIdentity },
 }, {
-  id: 'krill', hosts: ['www.krill-code.com', 'krill-code.com', 'api-slb.krill-code.net', 'api.cdn-krill-ai.com'],
+  id: 'krill', hosts: KRILL_HOSTS,
   source: { name: 'Krill', url: 'https://www.krill-code.com/status' },
   endpoint: 'https://www.krill-code.com/api/public/channel-status?hours=24',
   parse: (data, now) => readKrillStatus(data, MODELS, now),
@@ -167,13 +168,20 @@ function requestContent(url, { outbound, signal, token, json, site = 'blackaicod
     (async () => {
       const route = await outbound.resolve(url);
       if (settled) return;
+      const accountAgent = outbound.accountAgent?.(url, route);
       const options = {
-        agent: outbound.agent(route, signal), signal, lookup: outbound.lookup?.(url, route),
+        agent: accountAgent || outbound.agent(route, signal), signal, lookup: outbound.lookup?.(url, route),
         headers: { accept, 'cache-control': 'no-cache', ...(token ? { authorization: 'Bearer ' + token } : {}),
           ...(ACCOUNT_SITES[site]?.session ? { 'user-agent': 'Mozilla/5.0 CodexTool' } : {}),
           ...(session ? { cookie: session.cookie, ...(json === undefined ? { 'New-Api-User': String(session.userId) } : {}) } : {}),
           ...(body === undefined ? {} : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }) },
       };
+      if (accountAgent) {
+        const incoming = await krillRequest(url, options, body);
+        if (incoming.statusCode !== 200) throw Object.assign(new Error('Status HTTP error'), { status: incoming.statusCode });
+        finish(null, captureCookies ? { text: incoming.text, cookies: incoming.headers['set-cookie'] || [] } : incoming.text);
+        return;
+      }
       request = body === undefined ? https.get(url, options) : https.request(url, { ...options, method: 'POST' });
       request.on('error', error => finish(error));
       request.on('response', incoming => {
@@ -211,6 +219,8 @@ function refreshFailure(error, timedOut, invalidResponse, timeoutMs) {
   }
   const reasons = { ECONNRESET: '连接被重置', ECONNREFUSED: '连接被拒绝', ENOTFOUND: '域名解析失败', EAI_AGAIN: '域名解析暂时失败',
     ENETUNREACH: '网络不可达', EHOSTUNREACH: '站点不可达', EPIPE: '连接已断开', ETIMEDOUT: '网络连接超时',
+    EPROTO: 'TLS 握手失败，请检查当前网络；Wi-Fi 已提供 VPN 时可继续使用直连',
+    ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR: 'TLS 握手失败，请检查当前网络；Wi-Fi 已提供 VPN 时可继续使用直连',
     CERT_HAS_EXPIRED: 'TLS 证书已过期', UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS 证书无法验证',
     ERR_TLS_CERT_ALTNAME_INVALID: 'TLS 证书与域名不匹配，请检查 DNS 或代理',
     PACKY_DNS_FAILED: 'Packycode 安全域名解析失败，请检查网络或代理',
@@ -235,6 +245,9 @@ class Availability {
       options.auths?.[site] || (site === 'blackaicoding' && options.auth) || new MonitorAuth(options.home, site)]));
     this.cache = new Map();
     this.controller = new AbortController();
+    this.monitoringController = new AbortController();
+    this.monitoringEnabled = true;
+    this.monitoringVersion = 0;
     this.authorizationQueue = Promise.resolve();
     this.authorizationVersion = 0;
     this.browserLogin = new BrowserLogin(options.browserLoginOptions);
@@ -242,6 +255,17 @@ class Availability {
       getEntry: options.getEntry, isPacky: baseurl => adapterFor(baseurl)?.id === 'packycode' }) : null;
     this.loginClients = new Map(Object.keys(ACCOUNT_SITES).map(site => [site,
       new (ACCOUNT_SITES[site].session ? AixorLogin : site === 'krill' ? KrillLogin : site === 'rightcode' ? RightcodeLogin : MonitorLogin)((url, settings) => (this.request || requestJson)(url, { outbound: this.outbound, ...settings, site }), this.clock, site)]));
+    this.setMonitoringEnabled(options.monitoringEnabled ?? true);
+  }
+
+  setMonitoringEnabled(enabled) {
+    if (this.monitoringEnabled === enabled) return;
+    this.monitoringEnabled = enabled;
+    this.monitoringVersion++;
+    this.monitoringController.abort();
+    this.monitoringController = new AbortController();
+    this.cache.clear();
+    this.packyBalance?.setMonitoringEnabled(enabled);
   }
 
   accountScope(site, entry) {
@@ -366,6 +390,7 @@ class Availability {
   }
 
   async read(adapter, model, resource = 'status', scope = adapter.id, statusScope = adapter.id) {
+    if (!this.monitoringEnabled) return { value: null, fetchedAt: null, error: true };
     const source = resource === 'status' ? adapter : adapter[resource];
     const requiresAuthorization = source.requiresAuthorization ?? adapter.requiresAuthorization;
     const perModel = typeof source.endpoint === 'function';
@@ -379,7 +404,7 @@ class Availability {
     entry.at = this.clock();
     entry.pending = (async () => {
       const controller = new AbortController();
-      const signal = AbortSignal.any([controller.signal, this.controller.signal]);
+      const signal = AbortSignal.any([controller.signal, this.controller.signal, this.monitoringController.signal]);
       let timedOut = false, invalidResponse = false;
       const timer = setTimeout(() => { timedOut = true; controller.abort(new Error('Status timeout')); }, this.timeoutMs);
       try {
@@ -414,7 +439,7 @@ class Availability {
         entry.error = true;
         entry.authRequired = requiresAuthorization && [401, 403].includes(error.status);
         entry.failure = { ...(error.resourceFailure || refreshFailure(error, timedOut, invalidResponse, this.timeoutMs)), at: this.clock() };
-        if (!this.controller.signal.aborted && !entry.authRequired) {
+        if (!this.controller.signal.aborted && this.monitoringEnabled && !entry.authRequired && (!signal.aborted || timedOut)) {
           // Fixed adapter/resource names and classified errors only: no credentials or raw responses.
           try { this.record({ event: 'availability_refresh_failed', provider: adapter.id, endpoint: resource,
             at: new Date(entry.failure.at).toISOString(), phase: 'refresh', outcome: 'failed',
@@ -431,6 +456,9 @@ class Availability {
 
   async snapshot(keys, model = MODELS[0], options = {}) {
     if (!MODELS.includes(model)) throw problem('不支持的可用性模型。', 400);
+    if (!this.monitoringEnabled) return { enabled: false, model, models: MODELS, refreshMs: REFRESH_MS, historyLength: HISTORY_LENGTH,
+      rows: keys.map(({ name, baseurl }) => ({ name, baseurl, model, state: 'disabled', message: '实时监测已关闭', history: [], last: null, uptimePct: null })) };
+    const monitoringVersion = this.monitoringVersion;
     const authorizationVersion = this.authorizationVersion;
     this.retainPackySources(options.allKeys || keys);
     if (options.automatic || options.followApiKey) keys = keys.map(entry => ['input', 'timicc', 'aigo'].includes(adapterFor(entry.baseurl)?.id) ? { ...entry, statusMode: 'api-key' } : entry);
@@ -443,6 +471,7 @@ class Availability {
       const scope = this.accountScope(adapter.id, key);
       const provider = statusGroup(key);
       const credential = adapter.requiresAuthorization ? await this.auths.get(scope).read() : null;
+      if (monitoringVersion !== this.monitoringVersion) return this.snapshot(keys, model, options);
       if (!monitors.has(provider) || credential) monitors.set(provider, scope);
     }
     const rows = await Promise.all(keys.map(async (routeEntry) => {
@@ -457,6 +486,7 @@ class Availability {
       if (keyBalance && this.packyBalance) row.balance = await this.packyBalance.read(accountBindingId ? accountSourceName : name, accountBindingId ? {} : { baseurl }).catch(() => ({
         kind: 'packy-key', state: 'error', message: '余额配置或中转 Key 无效，请检查余额设置。', fetchedAt: null,
       }));
+      if (monitoringVersion !== this.monitoringVersion) return { ...row, state: 'disabled', history: [], last: null, uptimePct: null };
       const scope = adapter.verifyAuthorization ? this.accountScope(adapter.id, { accountId }) : adapter.id;
       // Krill's different subscription endpoints share one public channel monitor.
       const provider = statusGroup({ baseurl, displayProviderId });
@@ -492,8 +522,8 @@ class Availability {
       return { ...row, state: status.last.ok ? 'available' : 'unavailable', message: status.last.ok ? '可用' : '异常' };
     }));
     // An account change during a refresh must not return the previous account's balance.
-    if (authorizationVersion !== this.authorizationVersion) return this.snapshot(this.getEntries ? await this.getEntries() : keys, model, options);
-    return { model, models: MODELS, refreshMs: REFRESH_MS, historyLength: HISTORY_LENGTH, rows };
+    if (authorizationVersion !== this.authorizationVersion || monitoringVersion !== this.monitoringVersion) return this.snapshot(this.getEntries ? await this.getEntries() : keys, model, options);
+    return { enabled: true, model, models: MODELS, refreshMs: REFRESH_MS, historyLength: HISTORY_LENGTH, rows };
   }
 
   invalidateAuthorization(site, scope = site) {
@@ -585,6 +615,7 @@ class Availability {
 
   async close() {
     this.controller.abort();
+    this.monitoringController.abort();
     this.packyBalance?.close();
     for (const client of this.loginClients.values()) client.clear();
     this.cache.clear();

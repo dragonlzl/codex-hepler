@@ -1,11 +1,17 @@
 const { createHash } = require('node:crypto');
 
+// Krill's forwarding domains change independently of its account and status APIs.
+const KRILL_HOSTS = Object.freeze([
+  'krill-code.com', 'www.krill-code.com', 'api-slb.krill-code.net', 'api.cdn-krill-ai.com', 'api.krill-code.net',
+  'api.kbsfdxc.com', 'api.kbsfdxc.net', 'api-slb.kbsfdxc.net',
+]);
+
 const MERCHANT_HOSTS = {
   input: ['ai.input.im'],
   blackaicoding: ['blackaicoding.com', 'www.blackaicoding.com'],
   aixor: ['aixor.org', 'www.aixor.org', 'aixor.cc', 'www.aixor.cc'],
   packycode: ['packyapi.com', 'www.packyapi.com', 'cf.api.fan', 'slb-v1.api.fan', 'codex-api.packycode.com'],
-  krill: ['krill-code.com', 'www.krill-code.com', 'api-slb.krill-code.net', 'api.cdn-krill-ai.com'],
+  krill: KRILL_HOSTS,
   rightcode: ['rightapi.ai', 'www.rightapi.ai'],
   timicc: ['timicc.com', 'www.timicc.com'],
   aigo: ['api.aigo0.com'],
@@ -31,4 +37,4 @@ function accountId(entry) {
   return createHash('sha256').update(JSON.stringify([providerId(entry.baseurl), key])).digest('hex');
 }
 
-module.exports = { providerId, accountId, merchantId };
+module.exports = { providerId, accountId, merchantId, KRILL_HOSTS };

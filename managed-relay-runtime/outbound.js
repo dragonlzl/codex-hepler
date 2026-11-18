@@ -7,6 +7,7 @@ const { getProxyForUrl } = require('proxy-from-env');
 const { atomicWrite, problem } = require('./config-store');
 const { readWindowsProxies } = require('./windows-proxy');
 const { PackyDns, HOST: PACKY_HOST } = require('./packy-dns');
+const KRILL_ACCOUNT_ORIGIN = 'https://www.krill-code.com';
 const { readMacProxies, detectFlyingBirdProxy, systemProxyFor, bypasses, loopback } = require('./system-proxy');
 
 function labelProxy(url) {
@@ -36,6 +37,7 @@ class Outbound {
     this.flyingbirdCacheMs = options.flyingbirdCacheMs ?? 2000;
     this.agents = new Map();
     this.activeAgents = new Set();
+    this.krillAccountAgent = null;
     this.localPorts = new Set(options.localPorts || []);
     this.closed = false;
     this.packyDns = new PackyDns(options.packyDnsOptions);
@@ -131,6 +133,15 @@ class Outbound {
     return !route.proxyUrl && url.protocol === 'https:' && url.hostname === PACKY_HOST ? this.packyDns.lookup : undefined;
   }
 
+  accountAgent(target, route) {
+    const url = new URL(target);
+    if (this.closed) throw new Error('Outbound closed');
+    if (route.proxyUrl || url.origin !== KRILL_ACCOUNT_ORIGIN) return null;
+    // Keep the account site's verified connection across refreshes and login steps.
+    this.krillAccountAgent ||= new https.Agent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1, timeout: 30000 });
+    return this.krillAccountAgent;
+  }
+
   agent(route, signal) {
     if (this.closed) throw new Error('Outbound closed');
     if (!route.proxyUrl) return false;
@@ -186,7 +197,7 @@ class Outbound {
     finally { controller.abort(); }
   }
 
-  close() { this.closed = true; this.packyDns.close(); for (const agent of [...this.agents.values(), ...this.activeAgents]) { agent.destroy(); agent.httpAgent?.destroy(); agent.httpsAgent?.destroy(); } this.agents.clear(); this.activeAgents.clear(); }
+  close() { this.closed = true; this.packyDns.close(); this.krillAccountAgent?.destroy(); this.krillAccountAgent = null; for (const agent of [...this.agents.values(), ...this.activeAgents]) { agent.destroy(); agent.httpAgent?.destroy(); agent.httpsAgent?.destroy(); } this.agents.clear(); this.activeAgents.clear(); }
 }
 
 module.exports = { Outbound, readMacProxies, detectFlyingBirdProxy, systemProxyFor, bypasses, loopback, safeError, labelProxy };

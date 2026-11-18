@@ -174,7 +174,7 @@ test('local login API protects origin and exposes neither login secrets nor toke
   await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://blackaicoding.com"\n');
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys: [{ name: 'code for me', baseurl: 'https://blackaicoding.com', value: 'sk-fixture' }] }));
   const logs = [];
-  const app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: entry => logs.push(entry) });
+  const app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: entry => logs.push(entry) });
   t.after(() => app.close());
   const post = (body, origin = app.uiUrl, endpoint = '/api/availability/login') => fetch(app.uiUrl + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
   assert.equal((await post(credentials, 'https://evil.example')).status, 403);

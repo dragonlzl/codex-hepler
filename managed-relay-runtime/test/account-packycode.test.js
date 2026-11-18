@@ -31,7 +31,7 @@ async function setup(t, options = {}) {
     } }, ...options,
   };
   let app;
-  const launch = async () => { app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions, log: () => {} }); };
+  const launch = async () => { app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions, log: () => {} }); };
   await launch();
   t.after(async () => { await app.close(); await fs.rm(home, { recursive: true, force: true }); });
   const get = async endpoint => (await fetch(app.uiUrl + endpoint)).json();
@@ -262,7 +262,7 @@ test('login bootstrap reports the failed public endpoint instead of a local file
     failure = error; calls.length = 0;
     const response = await c.get('/api/availability/login/options?site=packycode');
     assert.match(response.error, reason);
-    if (['ECONNRESET', 'ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT'].includes(error.code)) assert.match(response.error, /无法访问.*请开启 VPN 或配置可用代理/);
+    if (['ECONNRESET', 'ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT'].includes(error.code)) assert.match(response.error, /无法访问.*请检查当前网络及.*上游网络/);
     else assert.ok(!response.error.includes('请开启 VPN'));
     assert.match(response.error, phase === packy.SETTINGS_ENDPOINT ? /登录设置/ : /人机验证配置/);
     assert.ok(!response.error.includes(privateText)); assert.ok(!response.error.includes('配置文件及权限'));

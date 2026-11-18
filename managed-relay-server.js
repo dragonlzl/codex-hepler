@@ -9,12 +9,13 @@ const { Diagnostics } = require('./managed-relay-runtime/diagnostics');
 const { Availability } = require('./managed-relay-runtime/availability');
 const { AutoSwitch } = require('./managed-relay-runtime/auto-switch');
 const { networkAccessError } = require('./managed-relay-runtime/network-error');
-const { settingsPath, readSettings, writeSettings, readOfficialNetworkMode, writeOfficialNetworkMode, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
+const { settingsPath, readSettings, writeSettings, readOfficialNetworkMode, writeOfficialNetworkMode, readAvailabilityMonitoring, writeAvailabilityMonitoring, writeConfigHome, writeConfigAppPath, resolveAppPath, resolveHome, displayPath } = require('./managed-relay-runtime/settings');
 const { configPath, loadCodexConfig, resolveCodexPaths } = require('./managed-relay-runtime/codex-config');
 const { createLauncher } = require('./managed-relay-runtime/codex-launcher');
 const { officialNetworkStatus } = require('./managed-relay-runtime/codex-launch');
 const { IntelligenceTests, routeId: intelligenceRouteId } = require('./managed-relay-runtime/intelligence-tests');
 const { loadBaseline } = require('./managed-relay-runtime/intelligence-review');
+const { CodexModelCatalog } = require('./managed-relay-runtime/codex-model-catalog');
 
 const PUBLIC_DIR = path.join(__dirname, 'managed-relay-public');
 const TYPES = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -69,6 +70,7 @@ async function start(options = {}) {
   const appPathLocked = paths.appSource === 'env';
   const launcher = options.launcher || createLauncher();
   let officialNetworkMode = options.officialNetworkMode || await readOfficialNetworkMode();
+  let availabilityMonitoringEnabled = options.monitoringEnabled ?? await readAvailabilityMonitoring();
   const readOfficialNetwork = options.officialNetworkStatus || (mode => officialNetworkStatus(mode));
   let launchInFlight = false;
 
@@ -76,16 +78,18 @@ async function start(options = {}) {
     const store = new ConfigStore(target, 'http://127.0.0.1:' + proxyPort + '/v1');
     const outbound = injected || new Outbound(target, { localPorts: [proxyPort, uiPort] });
     const diagnostics = new Diagnostics(target);
+    const catalog = new CodexModelCatalog(target, store, outbound, options.catalogOptions);
     const intelligence = new IntelligenceTests(target, name => store.entry(name), outbound, options.intelligenceOptions);
     const availability = new Availability(outbound, {
       ...options.availabilityOptions, home: target, getEntry: name => store.entry(name), getEntries: async () => (await store.status()).keys,
+      monitoringEnabled: availabilityMonitoringEnabled,
       record: entry => diagnostics.record(entry),
     });
     const autoSwitch = new AutoSwitch(store, availability, { ...options.autoSwitchOptions, record: event => {
       const safe = diagnostics.record(event);
       (options.log || console.log)(JSON.stringify(safe));
     } });
-    return { store, outbound, diagnostics, availability, autoSwitch, intelligence };
+    return { store, outbound, diagnostics, availability, autoSwitch, intelligence, catalog };
   };
   // holder 的字段会被原地替换；下面的 facade 让代理与请求处理器始终读到当前目录的对象。
   const holder = { home: initialHome, ...build(initialHome, options.outbound) };
@@ -112,7 +116,8 @@ async function start(options = {}) {
     lastRequest = entry;
     record({ event: 'relay_request', ...entry });
     autoSwitch.observe(entry);
-  }, options.timeoutMs, outbound, options.connectTimeoutMs, entry => record({ event: 'relay_request_started', ...entry }));
+  }, options.timeoutMs, outbound, options.connectTimeoutMs, entry => record({ event: 'relay_request_started', ...entry }),
+  async () => (await holder.catalog.snapshot()).catalog);
   const lockReason = '当前目录由环境变量或启动参数指定，不能在页面修改。';
   const status = async () => {
     const intelligence = holder.intelligence;
@@ -131,7 +136,7 @@ async function start(options = {}) {
       launch,
       autoSwitch: autoSwitch.snapshot(),
       intelligence: await intelligence.snapshot(current.keys),
-      lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, accountGroupingAvailable: true,
+      lastRequest, lastDiagnostic, diagnosticsAvailable: true, availabilityAvailable: true, availabilityMonitoringEnabled, accountGroupingAvailable: true,
       officialNetwork, network: await outbound.status(entry?.baseurl) };
   };
   // 切换目录：先构建并验证新目录确实可用，再落盘，最后替换，任何一步失败都不会留下不一致状态。
@@ -150,8 +155,9 @@ async function start(options = {}) {
       const fromConfig = homeSource === 'config';
       if (fromConfig) await writeConfigHome(paths.configFile, resolved);
       else await writeSettings({ home: resolved });
-      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics, availability: holder.availability, autoSwitch: holder.autoSwitch, intelligence: holder.intelligence };
+      const previous = { outbound: holder.outbound, diagnostics: holder.diagnostics, availability: holder.availability, autoSwitch: holder.autoSwitch, intelligence: holder.intelligence, catalog: holder.catalog };
       previous.autoSwitch.stop();
+      previous.catalog.close();
       Object.assign(holder, { home: resolved, ...next });
       next = null;
       homeSource = fromConfig ? 'config' : 'saved';
@@ -165,7 +171,7 @@ async function start(options = {}) {
       lastDiagnostic = null;
       return { message: `已切换到 ${resolved}，已保存到${fromConfig ? ' JSON 配置文件' : '目录设置'}${created ? '，并创建了空的 key_config.json' : ''}。` };
     } finally {
-      if (next) { next.autoSwitch.stop(); await next.intelligence.close(); await next.availability.close(); await next.autoSwitch.close(); next.outbound.close(); await next.diagnostics.close(); }
+      if (next) { next.autoSwitch.stop(); next.catalog.close(); await next.intelligence.close(); await next.availability.close(); await next.autoSwitch.close(); next.outbound.close(); await next.diagnostics.close(); }
       savingPaths = false;
     }
   };
@@ -218,7 +224,7 @@ async function start(options = {}) {
           json(res, 200, { ...result, status: await status() });
           return;
         }
-        if ((launchInFlight || savingPaths) && ['/api/home', '/api/app-path', '/api/proxy/install', '/api/proxy/restore', '/api/select', '/api/account-mode', '/api/official-network'].includes(url.pathname)) {
+        if ((launchInFlight || savingPaths) && ['/api/home', '/api/app-path', '/api/proxy/install', '/api/proxy/restore', '/api/select', '/api/account-mode', '/api/official-network', '/api/availability/settings'].includes(url.pathname)) {
           throw problem(savingPaths ? '目录或应用路径正在保存，请稍后重试。' : '正在启动 Codex，请稍后再修改连接配置。', 409);
         }
         if (url.pathname.startsWith('/api/availability/browser-login/')) {
@@ -243,6 +249,15 @@ async function start(options = {}) {
           if (['pending', 'running'].includes(launch.cli?.state)) throw problem('请先退出本工具启动的 Codex CLI，再切换账号模式。', 409);
           result = await store.switchAccountMode(payload.mode);
         }
+        else if (url.pathname === '/api/availability/settings') {
+          if (!payload || typeof payload.enabled !== 'boolean' || Object.keys(payload).some(key => key !== 'enabled')) throw problem('实时监测开关无效。', 400);
+          savingPaths = true;
+          try { availabilityMonitoringEnabled = await writeAvailabilityMonitoring(payload.enabled); }
+          finally { savingPaths = false; }
+          availability.setMonitoringEnabled(availabilityMonitoringEnabled);
+          autoSwitch.monitoringChanged();
+          result = { message: availabilityMonitoringEnabled ? '实时监测已开启，每 15 秒更新状态与额度。' : '实时监测已关闭，已停止状态与额度自动查询，自动切换已暂停。' };
+        }
         else if (url.pathname === '/api/official-network') {
           if (req.headers.origin !== uiUrl) throw problem('官方连接设置必须来自本地管理页面。', 403);
           if (!payload || !['auto', 'wifi'].includes(payload.mode) || Object.keys(payload).some(key => key !== 'mode')) throw problem('官方连接方式无效。', 400);
@@ -256,6 +271,20 @@ async function start(options = {}) {
         else if (url.pathname === '/api/select') result = await store.select(payload.name, payload.mode);
         else if (url.pathname === '/api/proxy/install') result = await store.install(payload.name);
         else if (url.pathname === '/api/proxy/restore') result = await store.restore();
+        else if (url.pathname === '/api/models/sync') {
+          if (req.headers.origin !== uiUrl) throw problem('模型同步必须来自本地管理页面。', 403);
+          if (!payload || Object.keys(payload).length) throw problem('模型同步不接受额外参数。', 400);
+          const currentStore = holder.store, catalog = holder.catalog;
+          const current = await currentStore.status();
+          if (!current.proxyInstalled || current.accountSwitch?.mode === 'official') throw problem('请先接入第三方本地代理，再同步 Codex 模型。');
+          if (current.modelCatalog.blockedReason) throw problem(current.modelCatalog.blockedReason);
+          const snapshot = await catalog.snapshot({ force: true });
+          if (catalog !== holder.catalog) throw problem('配置目录已切换，请重新同步 Codex 模型。');
+          const enabled = await currentStore.enableModelCatalog(snapshot.routeKey);
+          const models = snapshot.catalog.models.filter(model => model.visibility === 'list').map(model => model.slug);
+          result = { ...enabled, models, message: `已同步 ${models.length} 个 Codex 模型。` + (enabled.restartRequired
+            ? '请完整退出并重启 Codex App 或 CLI，加载新的模型目录。' : '在 Codex 中重新打开模型选择器即可刷新；若仍显示旧列表，请重启 Codex。') };
+        }
         else if (url.pathname === '/api/keys') result = await store.add(payload);
         else if (url.pathname === '/api/keys/edit') {
           const currentStore = holder.store, intelligence = holder.intelligence;
@@ -354,9 +383,9 @@ async function start(options = {}) {
     outbound.localPorts.add(proxy.address().port);
     outbound.localPorts.add(ui.address().port);
     autoSwitch.start();
-  } catch (error) { autoSwitch.stop(); await holder.intelligence.close(); await availability.close(); await autoSwitch.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
+  } catch (error) { autoSwitch.stop(); holder.catalog.close(); await holder.intelligence.close(); await availability.close(); await autoSwitch.close(); await close(proxy); await close(ui); outbound.close(); await diagnostics.close(); throw error; }
   return { uiUrl, proxyUrl: store.proxyUrl, store, outbound, status, autoSwitch, close: async () => {
-    autoSwitch.stop(); await holder.intelligence.close(); await availability.close(); await autoSwitch.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close();
+    autoSwitch.stop(); holder.catalog.close(); await holder.intelligence.close(); await availability.close(); await autoSwitch.close(); await close(ui); await close(proxy); outbound.close(); await diagnostics.close();
   } };
 }
 

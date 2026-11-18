@@ -3,6 +3,7 @@ const https = require('node:https');
 const { randomUUID } = require('node:crypto');
 const { safeError } = require('./outbound');
 const { accountId } = require('./relay-identity');
+const { CATALOG_SUFFIX } = require('./codex-model-catalog');
 
 function cleanHeaders(headers) {
   const cleaned = { ...headers };
@@ -28,7 +29,7 @@ function sendError(res, status, message) {
   res.end(JSON.stringify({ error: { message, type: 'relay_error' } }));
 }
 
-function createProxy(store, observe = () => {}, timeoutMs = 120000, outbound, connectTimeoutMs = 15000, observeStart = () => {}) {
+function createProxy(store, observe = () => {}, timeoutMs = 120000, outbound, connectTimeoutMs = 15000, observeStart = () => {}, getCatalog) {
   function received(req) {
     const startedAt = new Date().toISOString();
     const pathname = new URL(req.url, 'http://localhost').pathname.replace(/^\/v1(?=\/|$)/, '');
@@ -38,6 +39,17 @@ function createProxy(store, observe = () => {}, timeoutMs = 120000, outbound, co
     return context;
   }
   const server = http.createServer((req, res) => {
+    const pathname = new URL(req.url, 'http://localhost').pathname.replace(/^\/v1(?=\/|$)/, '');
+    if (getCatalog && pathname === CATALOG_SUFFIX) {
+      req.resume();
+      if (req.method !== 'GET') { sendError(res, 405, '模型目录仅支持 GET。'); return; }
+      Promise.resolve().then(getCatalog).then(catalog => {
+        if (res.destroyed) return;
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(catalog));
+      }).catch(error => sendError(res, error.status || 502, error.status ? error.message : '无法读取 Codex 模型目录。'));
+      return;
+    }
     forward(req, res).catch(() => sendError(res, 502, '本地代理请求失败，请检查中转配置。'));
   });
   const sockets = new Set();

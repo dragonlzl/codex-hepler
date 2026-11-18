@@ -159,7 +159,7 @@ test('local Krill login and manual token API expose no credentials; clearing wip
   await fs.writeFile(path.join(home, 'config.toml'), 'model_provider="relay"\n[model_providers.relay]\nbase_url="https://www.krill-code.com"\n');
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys }));
   await new MonitorAuth(home, 'input').save(otherFixture.INPUT_TOKEN);
-  const app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: item => logs.push(item) }); t.after(() => app.close());
+  const app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request: fixture.request }, log: item => logs.push(item) }); t.after(() => app.close());
   const post = (endpoint, body, origin = app.uiUrl) => fetch(app.uiUrl + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ name: keys[0].name, ...body }) });
   assert.equal((await post('/api/availability/login', credentials, 'https://www.krill-code.com')).status, 403);
   const response = await post('/api/availability/login', credentials); assert.equal(response.status, 200); const result = await response.json();

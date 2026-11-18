@@ -34,17 +34,19 @@ test('provider and account groups preserve order, distinguish identical masks an
 });
 
 test('Krill aliases form one provider while their complete URLs distinguish lines and credentials', () => {
-  const urls = ['https://api-slb.krill-code.net/codex/v1', 'https://api.cdn-krill-ai.com/coding/v1', 'https://api.cdn-krill-ai.com/codex/v1'];
+  const urls = ['https://api-slb.krill-code.net/codex/v1', 'https://api.cdn-krill-ai.com/coding/v1', 'https://api.cdn-krill-ai.com/codex/v1',
+    'https://api-slb.kbsfdxc.net/v1', 'https://api.kbsfdxc.com/v1', 'https://api.kbsfdxc.net/codex/v1', 'https://api.krill-code.net/codex/v1'];
   const routes = urls.map((baseurl, i) => ({ name: 'Krill ' + i, baseurl, value: 'same-key', providerId: providerId(baseurl), accountId: accountId({ baseurl, value: 'same-key' }) }));
   routes.push({ ...routes[0], name: 'Krill alias', baseurl: urls[0] + '/' });
   const groups = group(routes);
   assert.equal(groups.length, 1);
   assert.equal(groups[0].id, 'krill');
-  assert.equal(groups[0].entries.length, 4);
-  assert.equal(groups[0].accounts.size, 3);
-  assert.deepEqual([...groups[0].accounts.values()].map(entries => entries.length), [2, 1, 1]);
-  assert.deepEqual(reorder(routes, 'Krill 2', 'Krill 0'), ['Krill 2', 'Krill 0', 'Krill alias', 'Krill 1']);
-  for (const baseurl of ['https://krill-code.com.evil.example/v1', 'https://api.cdn-krill-ai.com:8443/v1', 'https://user@krill-code.com/v1']) {
+  assert.equal(groups[0].entries.length, urls.length + 1);
+  assert.equal(groups[0].accounts.size, urls.length);
+  assert.deepEqual([...groups[0].accounts.values()].map(entries => entries.length), [2, ...urls.slice(1).map(() => 1)]);
+  assert.deepEqual(reorder(routes, 'Krill 2', 'Krill 0'), ['Krill 2', 'Krill 0', 'Krill alias', 'Krill 1', 'Krill 3', 'Krill 4', 'Krill 5', 'Krill 6']);
+  for (const baseurl of ['https://krill-code.com.evil.example/v1', 'https://api.cdn-krill-ai.com:8443/v1', 'https://user@krill-code.com/v1',
+    'https://api-slb.kbsfdxc.net.evil.example/v1', 'https://api.kbsfdxc.com:8443/v1', 'https://user@api.kbsfdxc.com/v1']) {
     assert.notEqual(group([{ name: 'Lookalike', baseurl }])[0].id, 'krill');
   }
 });
@@ -98,7 +100,7 @@ test('HTTP accounts share login only for matching keys; clear, 2FA, edits and re
     if (url === SUBSCRIPTIONS_ENDPOINT && options.token === secondToken) return fixture.subscriptions();
     return fixture.request(url, options);
   };
-  let app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request }, log: () => {} });
+  let app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request }, log: () => {} });
   t.after(() => app.close());
   const get = async url => (await fetch(app.uiUrl + url)).json();
   const post = async (url, payload) => {
@@ -147,7 +149,7 @@ test('HTTP accounts share login only for matching keys; clear, 2FA, edits and re
   assert.equal((await post('/api/availability/authorization', { site: 'input', name: changed.name, accountId: changed.accountId, token: secondToken })).code, 409);
   assert.equal((await rows()).find(row => row.name === 'Separate').balance.state, 'auth-required');
   await app.close();
-  app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request }, log: () => {} });
+  app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request }, log: () => {} });
   data = await rows();
   assert.equal(data.find(row => row.name === 'Renamed').balance.amount, 67.89123);
   assert.equal(data.find(row => row.name === 'Separate').balance.state, 'auth-required');

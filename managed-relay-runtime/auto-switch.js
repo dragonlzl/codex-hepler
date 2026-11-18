@@ -22,9 +22,26 @@ class AutoSwitch {
 
   start() {
     if (this.closed || this.timer) return;
-    this.timer = setInterval(() => this.tick(), this.intervalMs);
-    this.timer.unref?.();
+    if (this.availability.monitoringEnabled !== false) {
+      this.timer = setInterval(() => this.tick(), this.intervalMs);
+      this.timer.unref?.();
+    }
     this.tick();
+  }
+
+  monitoringChanged() {
+    this.generation++;
+    clearInterval(this.timer);
+    this.timer = null;
+    this.state = { ...this.state, candidates: [], waitUntil: null,
+      phase: this.availability.monitoringEnabled ? 'checking' : 'paused',
+      message: this.availability.monitoringEnabled ? '实时监测已开启，等待重新检测' : '实时监测已关闭，自动切换已暂停' };
+    // Let an invalidated cycle finish before starting a fresh one.
+    if (this.availability.monitoringEnabled) {
+      const previous = this.pending;
+      this.start();
+      previous?.then(() => { if (!this.closed && this.availability.monitoringEnabled) this.tick(); });
+    }
   }
 
   invalidate() {
@@ -33,7 +50,7 @@ class AutoSwitch {
   }
 
   observe(event) {
-    if (this.closed || !this.settings?.enabled || !event.provider || event.status === 499 || event.outcome === 'cancelled') return;
+    if (this.closed || this.availability.monitoringEnabled === false || !this.settings?.enabled || !event.provider || event.status === 499 || event.outcome === 'cancelled') return;
     const key = this.keys?.find(key => key.name === event.provider);
     if (!key || event.routeId !== key.naturalAccountId) return;
     const at = Date.parse(event.at), startedAt = Date.parse(event.startedAt);
@@ -80,11 +97,12 @@ class AutoSwitch {
       this.signature = signature;
     }
     this.keys = status.keys;
-    if (!settings.enabled || !status.proxyInstalled || status.writeBlocked) {
+    if (!settings.enabled || this.availability.monitoringEnabled === false || !status.proxyInstalled || status.writeBlocked) {
       await this.funding.save();
       if (generation !== this.generation || this.closed) return;
       this.state = { ...this.state, candidates: [], waitUntil: null, phase: !settings.enabled ? 'disabled' : 'paused',
-        message: !settings.enabled ? '自动切换已关闭' : status.writeBlocked ? '配置写入被阻止，自动切换已暂停' : '尚未接入本地代理，自动切换已暂停' };
+        message: !settings.enabled ? '自动切换已关闭' : this.availability.monitoringEnabled === false ? '实时监测已关闭，自动切换已暂停'
+          : status.writeBlocked ? '配置写入被阻止，自动切换已暂停' : '尚未接入本地代理，自动切换已暂停' };
       return;
     }
     const authVersion = this.availability.authorizationVersion;
@@ -139,7 +157,9 @@ class AutoSwitch {
         : active.currentHealth === 'unavailable' ? '当前渠道不可用，立即切换'
           : !active.qualified ? active.reason
             : target.healthRank < (active.healthRank ?? 2) ? '绿色候选优先' : '优先级或订阅入口恢复';
-    if (await this.store.selectAutomatic(target.name, status.autoSwitchGuard, valid)) {
+    const switched = await this.store.selectAutomatic(target.name, status.autoSwitchGuard, valid);
+    if (!valid()) return;
+    if (switched) {
       const lastSwitch = { at: now, from: status.activeName, to: target.name, reason, source: target.source };
       this.state = { ...this.state, phase: 'active', message: `已切换至「${target.name}」`, lastSwitch };
       this.record({ event: 'relay_auto_switch', at: new Date(now).toISOString(), provider: target.name,

@@ -32,7 +32,7 @@ async function setup(t, entries = keys, availabilityOptions = {}) {
   await fs.writeFile(path.join(home, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: entries[0].value }));
   await fs.writeFile(path.join(home, 'key_config.json'), JSON.stringify({ keys: entries, extra: 'preserved' }));
   let app;
-  const launch = async () => { app = await start({ home, uiPort: 0, proxyPort: 0, availabilityOptions: { request, ...availabilityOptions }, log: () => {} }); };
+  const launch = async () => { app = await start({ monitoringEnabled: true, home, uiPort: 0, proxyPort: 0, availabilityOptions: { request, ...availabilityOptions }, log: () => {} }); };
   await launch();
   t.after(async () => { await app.close(); await fs.rm(home, { recursive: true, force: true }); });
   const get = async endpoint => (await fetch(app.uiUrl + endpoint)).json();
@@ -89,6 +89,60 @@ test('manual bindings persist, share login through any member, and unbind restor
   assert.deepEqual(config, { keys, extra: 'preserved' });
   const serialized = JSON.stringify({ status, rows, bound });
   for (const secret of [fixture.INPUT_TOKEN, SECOND_TOKEN, fixture.PASSWORD, ...keys.map(entry => entry.value)]) assert.ok(!serialized.includes(secret));
+});
+
+test('Krill weekly and regular configurations on new domains share one login and quota after binding', async t => {
+  const krill = require('../account-krill');
+  const krillFixture = require('./krill-account-fixture');
+  const entries = [
+    { name: 'Krill regular', baseurl: 'https://api-slb.kbsfdxc.net/v1', value: 'sk-krill-shared' },
+    { name: 'Krill weekly', baseurl: 'https://api.kbsfdxc.com/v1', value: 'sk-krill-shared' },
+    { name: 'Krill other account', baseurl: 'https://api.kbsfdxc.net/v1', value: 'sk-krill-other' },
+  ];
+  const calls = [];
+  const ctx = await setup(t, entries, { request: async (url, options) => {
+    calls.push(url);
+    if (url === krillFixture.PUBLIC) assert.equal(options.token, undefined);
+    return krillFixture.request(url, options);
+  } });
+  assert.ok((await ctx.status()).keys.every(entry => entry.merchantId === 'krill'));
+  const bound = await ctx.bind(entries[0].name, [entries[1].name]);
+  assert.equal(bound.code, 200);
+  const status = bound.data.status;
+  assert.equal(status.keys[0].accountId, status.keys[1].accountId);
+  assert.notEqual(status.keys[0].accountId, status.keys[2].accountId);
+  assert.equal(group(status.keys).length, 1);
+  assert.equal(group(status.keys)[0].accounts.size, 2);
+  assert.equal((await ctx.post('/api/availability/login', {
+    site: 'krill', name: entries[1].name, username: 'normal', password: krillFixture.PASSWORD,
+  })).code, 200);
+  calls.length = 0;
+  let rows = await ctx.rows();
+  for (const row of rows.slice(0, 2)) {
+    assert.equal(row.authorizationSite, 'krill');
+    assert.equal(row.balance.state, 'available');
+    assert.equal(row.balance.amount, 88.125);
+    assert.equal(row.subscriptions.state, 'available');
+    assert.equal(row.subscriptions.items.length, 2);
+  }
+  assert.deepEqual(rows[0].subscriptions, rows[1].subscriptions);
+  assert.equal(rows[2].balance.state, 'auth-required');
+  for (const endpoint of [krillFixture.PUBLIC, krill.BALANCE_ENDPOINT, krill.SUBSCRIPTIONS_ENDPOINT, krill.USAGE_ENDPOINT]) {
+    assert.equal(calls.filter(url => url === endpoint).length, 1);
+  }
+  await ctx.restart();
+  rows = await ctx.rows();
+  assert.ok(rows.slice(0, 2).every(row => row.balance.amount === 88.125 && row.subscriptions.state === 'available'));
+  assert.equal(rows[2].balance.state, 'auth-required');
+  const config = JSON.parse(await fs.readFile(path.join(ctx.home, 'key_config.json'), 'utf8'));
+  assert.deepEqual(config.keys, entries);
+  assert.equal((await ctx.post('/api/availability/authorization', {
+    site: 'krill', name: entries[0].name, accountId: status.keys[0].accountId, token: '',
+  })).code, 200);
+  rows = await ctx.rows();
+  assert.ok(rows.slice(0, 2).every(row => row.balance.state === 'auth-required' && row.subscriptions.state === 'auth-required'));
+  const serialized = JSON.stringify({ status, rows, bound });
+  for (const secret of [krillFixture.TOKEN, krillFixture.PASSWORD, ...entries.map(entry => entry.value)]) assert.ok(!serialized.includes(secret));
 });
 
 test('merging bound groups preserves the chosen account and cancels obsolete two-factor challenges', async t => {

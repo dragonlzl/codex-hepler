@@ -1,7 +1,8 @@
 /* Shared display rules; only opaque server account IDs are compared, never masked keys. */
 const RelayGroups = (() => {
   const packyHosts = new Set(['packyapi.com', 'www.packyapi.com', 'cf.api.fan', 'slb-v1.api.fan', 'codex-api.packycode.com']);
-  const krillHosts = new Set(['krill-code.com', 'www.krill-code.com', 'api-slb.krill-code.net', 'api.cdn-krill-ai.com']);
+  const krillHosts = new Set(['krill-code.com', 'www.krill-code.com', 'api-slb.krill-code.net', 'api.cdn-krill-ai.com', 'api.krill-code.net',
+    'api.kbsfdxc.com', 'api.kbsfdxc.net', 'api-slb.kbsfdxc.net']);
   function endpoint(entry) {
     try { return new URL(entry.baseurl).href.replace(/\/+$/, ''); }
     catch { return String(entry.baseurl || ''); }
